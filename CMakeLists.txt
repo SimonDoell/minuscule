@@ -11,3 +11,5 @@ add_executable(minuscule
 )
 
 target_compile_options(minuscule PRIVATE -Wall -Werror -Wpedantic -Wno-unused)
+
+target_link_libraries(minuscule PRIVATE m)

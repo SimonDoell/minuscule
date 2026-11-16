@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdio.h>
 #include <assert.h>
 #include <stdint.h>
@@ -94,6 +95,15 @@ static inline bool mat_is_empty(const Matrix* m) {
     assert(m);
     assert((m->rows == 0 && m->cols == 0 && !m->values) || (m->rows > 0 && m->cols > 0 && m->values));
     return m->rows == 0 && m->cols == 0;
+}
+
+static inline Matrix mat_clone(const Matrix* m) {
+    Matrix dest = mat_new(m->rows, m->cols);
+
+    for (u32 i = 0; i < mat_elem_count(m); ++i)
+        dest.values[i] = m->values[i];
+    
+    return dest;
 }
 
 static inline void mat_ensure_shape(Matrix* m, u32 rows, u32 cols) {
@@ -334,6 +344,27 @@ static inline void layer_free(Layer* layer) {
     }
 }
 
+static inline void layer_forward(Layer* layer, Matrix* inout /*activation*/, bool train) {
+    abort();
+}
+
+static inline void layer_backward(Layer* layer, Matrix* inout /*gradient*/) {
+    abort();
+}
+
+typedef struct {
+    Matrix* param;
+    Matrix* gradient;
+} ParamGrad;
+
+static inline ParamGrad layer_get_param_gradient(Layer* layer) {
+    switch (layer->layer_type) {
+        case Linear: {return (ParamGrad){&layer->data.linear.weights, &layer->data.linear.grad_weights};};
+        case Biases: {return (ParamGrad){&layer->data.biases.biases,  &layer->data.biases.grad_biases};};
+        default: abort();
+    }
+}
+
 typedef struct {
     u32 fan_in;
     u32 fan_out;
@@ -381,10 +412,32 @@ static inline void adam_w_free(AdamW* adam_w) {
     *adam_w = (AdamW){0};
 }
 
+static inline void adam_w_update(AdamW* adam_w, Matrix* param, Matrix* gradient, float betta_1, float betta_2, float lambda, float lr, u32 t) {
+    assert(adam_w->momentum.rows == gradient->rows);
+    assert(adam_w->momentum.cols == gradient->cols);
+
+    const float betta_1_t = 1.0 - powf(betta_1, t);
+    const float betta_2_t = 1.0 - powf(betta_2, t);
+
+    for (u32 i = 0; i < mat_elem_count(gradient); ++i) {
+        float  g = gradient->values[i];
+        float* m = &adam_w->momentum.values[i];
+        float* v = &adam_w->varaince.values[i];
+        float* w = &param->values[i];
+
+        *m = betta_1 * *m + (1.0 - betta_1) * g;
+        *v = betta_2 * *v + (1.0 - betta_2) * g * g;
+
+        float m_hat = *m / betta_1_t;
+        float v_hat = *v / betta_2_t;
+
+        *w -= lr * (m_hat / (sqrtf(v_hat) + 1e-5f) + lambda * *w);
+    }
+}
+
 typedef struct {
     u32 layer_count;
-    float lr_begin;
-    float lr_end;
+    float lr;
     float betta_1;
     float betta_2;
     float lambda;
@@ -397,8 +450,7 @@ typedef struct {
 
 static inline MLP mlp_new(void) {
     return (MLP){
-        .lr_begin   = 0.005,
-        .lr_end     = 0.005,
+        .lr         = 0.005,
         .betta_1    = 0.9,
         .betta_2    = 0.999,
         .lambda     = 0.001,
@@ -432,8 +484,51 @@ static inline void mlp_push_layer(MLP* mlp, Layer layer) {
     mlp->adam_w[mlp->layer_count - 1] = adam_w_new(layer_get_shape(&layer));
 }
 
+static inline void mlp_forward(MLP* mlp, Matrix* inout) {
+    assert(!mat_is_empty(inout));
+
+    for (u32 i = 0; i < mlp->layer_count; ++i)
+        layer_forward(&mlp->layers[i], inout, false);
+}
+
+static inline void _mlp_apply_gradients(MLP* mlp) {
+    assert(mlp);
+
+    for (u32 i = 0; i < mlp->layer_count; ++i) {
+        if (!mlp->layers[i].requires_optimizer)
+            continue;
+        
+        ParamGrad param_grad = layer_get_param_gradient(&mlp->layers[i]);
+        adam_w_update(&mlp->adam_w[i], param_grad.param, param_grad.gradient, mlp->betta_1, mlp->betta_2, mlp->lambda, mlp->lr, mlp->t);
+    }
+}
+
+static inline void mlp_train(MLP* mlp, const Matrix* input, const Matrix* desired_output) {
+    assert(mlp);
+    
+    Matrix activation = mat_clone(input);
+
+    for (u32 i = 0; i < mlp->layer_count; ++i)
+        layer_forward(&mlp->layers[i], &activation, true);
+
+    mat_sub_into(&activation, desired_output, &activation); // MSE derivative
+
+    for (i32 i = mlp->layer_count - 1; i >= 0; --i)
+        layer_backward(&mlp->layers[i], &activation);
+
+    if ((mlp->t % mlp->mini_batch) == 0) {
+        _mlp_apply_gradients(mlp);
+    }
+
+    mlp->t++;
+}
+
 #ifdef __cplusplus
 }
 #endif
 
 #endif // MLP_H
+
+
+// ToDo:
+// - cosine lr decay
