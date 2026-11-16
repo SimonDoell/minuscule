@@ -115,6 +115,15 @@ static inline void mat_ensure_shape(Matrix* m, u32 rows, u32 cols) {
     *m = mat_new(rows, cols);
 }
 
+static inline void mat_clone_into(const Matrix* src, Matrix* dest) {
+    if (src->rows != dest->rows || src->cols != dest->cols) {
+        mat_ensure_shape(dest, src->rows, src->cols);
+    }
+
+    for (u32 i = 0; i < mat_elem_count(src); ++i)
+        dest->values[i] = src->values[i];
+}
+
 static inline void mat_add_into(const Matrix* a, const Matrix* b, Matrix* out) {
     assert(a->rows == b->rows);
     assert(a->cols == b->cols);
@@ -282,6 +291,11 @@ static inline void linear_free(LinearLayer* linear) {
     *linear = (LinearLayer){0};
 }
 
+static inline void linear_forward(LinearLayer* linear, Matrix* inout, bool train) {
+    mat_clone_into(inout, &linear->cached_activation);
+    mat_mul_into(&linear->weights, &linear->cached_activation, inout, false, false, true);
+}
+
 static inline Layer biases_new(u32 fan_in) {
     Layer layer;
     layer.layer_type = Biases;
@@ -304,6 +318,11 @@ static inline void biases_free(BiasesLayer* biases) {
     mat_free(&biases->cached_activation);
 
     *biases = (BiasesLayer){0};
+}
+
+static inline void biases_forward(BiasesLayer* biases, Matrix* inout, bool train) {
+    if (train) mat_clone_into(inout, &biases->cached_activation);
+    mat_add_into(inout, &biases->biases, inout);
 }
 
 float relu(float x) {
@@ -334,6 +353,13 @@ static inline void activation_free(ActivationLayer* activation) {
     *activation = (ActivationLayer){0};
 }
 
+static inline void activation_forward(ActivationLayer* activation, Matrix* inout, bool train) {
+    if (train) mat_clone_into(inout, &activation->cached_activation);
+
+    for (i32 i = 0; i < mat_elem_count(inout); ++i)
+        inout->values[i] = activation->forward(inout->values[i]);
+}
+
 static inline void layer_free(Layer* layer) {
     assert(layer);
     switch (layer->layer_type) {
@@ -345,7 +371,12 @@ static inline void layer_free(Layer* layer) {
 }
 
 static inline void layer_forward(Layer* layer, Matrix* inout /*activation*/, bool train) {
-    abort();
+    switch (layer->layer_type) {
+        case Linear: {linear_forward(&layer->data.linear, inout, train);} break;
+        case Biases: {biases_forward(&layer->data.biases, inout, train);} break;
+        case ActivationFunction: {activation_forward(&layer->data.activation, inout, train);} break;
+        default: abort();
+    }
 }
 
 static inline void layer_backward(Layer* layer, Matrix* inout /*gradient*/) {
@@ -359,8 +390,8 @@ typedef struct {
 
 static inline ParamGrad layer_get_param_gradient(Layer* layer) {
     switch (layer->layer_type) {
-        case Linear: {return (ParamGrad){&layer->data.linear.weights, &layer->data.linear.grad_weights};};
-        case Biases: {return (ParamGrad){&layer->data.biases.biases,  &layer->data.biases.grad_biases};};
+        case Linear: return (ParamGrad){&layer->data.linear.weights, &layer->data.linear.grad_weights}; break;
+        case Biases: return (ParamGrad){&layer->data.biases.biases,  &layer->data.biases.grad_biases}; break;
         default: abort();
     }
 }
