@@ -9,6 +9,14 @@
 #define countof(arr) (sizeof(arr) / sizeof(arr[0]))
 #endif
 
+#ifndef MAX
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#endif
+
+#ifndef MIN
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
+
 #ifndef MLP_H
 #define MLP_H
 
@@ -288,6 +296,14 @@ static inline void biases_free(BiasesLayer* biases) {
     *biases = (BiasesLayer){0};
 }
 
+float relu(float x) {
+    return MAX(x, 0.0);
+}
+
+float relu_derivative(float x) {
+    return (x >= 0.0 ? 1.0 : 0.0);
+}
+
 static inline Layer activation_new(u32 fan_in, Function forward, Function derivative) {
     Layer layer;
     layer.layer_type = ActivationFunction;
@@ -308,10 +324,62 @@ static inline void activation_free(ActivationLayer* activation) {
     *activation = (ActivationLayer){0};
 }
 
+static inline void layer_free(Layer* layer) {
+    assert(layer);
+    switch (layer->layer_type) {
+        case Linear: linear_free(&layer->data.linear); break;
+        case Biases: biases_free(&layer->data.biases); break;
+        case ActivationFunction: activation_free(&layer->data.activation); break;
+        default: abort();
+    }
+}
+
+typedef struct {
+    u32 fan_in;
+    u32 fan_out;
+} LayerInfo;
+
+static inline bool info_requires_optimizer(const LayerInfo* info) {
+    assert((info->fan_in > 0 && info->fan_out > 0) || (info->fan_in == 0 && info->fan_out == 0));
+    return (info->fan_in > 0 && info->fan_out > 0);
+}
+
+static inline LayerInfo layer_get_shape(const Layer* layer) {
+    assert(layer);
+    switch (layer->layer_type) {
+        case Linear: return (LayerInfo){.fan_in = layer->data.linear.weights.cols, .fan_out = layer->data.linear.weights.rows}; break;
+        case Biases: return (LayerInfo){.fan_in = layer->data.biases.biases .cols, .fan_out = layer->data.biases.biases .rows}; break;
+        case ActivationFunction: return (LayerInfo){0}; break;
+        default: abort();
+    }
+}
+
 typedef struct {
     Matrix momentum;
     Matrix varaince;
 } AdamW;
+
+static inline AdamW adam_w_new(const LayerInfo layer_info) {
+    if (info_requires_optimizer(&layer_info))
+        return (AdamW){
+            .momentum = mat_new(layer_info.fan_out, layer_info.fan_in),
+            .varaince = mat_new(layer_info.fan_out, layer_info.fan_in),
+        };
+    else
+        return (AdamW){
+            .momentum = mat_empty(),
+            .varaince = mat_empty(),
+        };
+}
+
+static inline void adam_w_free(AdamW* adam_w) {
+    assert(adam_w);
+
+    if (!mat_is_empty(&adam_w->momentum)) mat_free(&adam_w->momentum);
+    if (!mat_is_empty(&adam_w->varaince)) mat_free(&adam_w->varaince);
+
+    *adam_w = (AdamW){0};
+}
 
 typedef struct {
     u32 layer_count;
@@ -324,6 +392,7 @@ typedef struct {
     u32 t;
     
     Layer* layers;
+    AdamW* adam_w;
 } MLP;
 
 static inline MLP mlp_new(void) {
@@ -342,23 +411,25 @@ static inline void mlp_free(MLP* mlp) {
     assert(mlp);
 
     for (u32 i = 0; i < mlp->layer_count; ++i) {
-        switch (mlp->layers[i].layer_type) {
-            case Linear: linear_free(&mlp->layers[i].data.linear); break;
-            case Biases: biases_free(&mlp->layers[i].data.biases); break;
-            case ActivationFunction: activation_free(&mlp->layers[i].data.activation); break;
-            default: abort();
-        }
+        layer_free(&mlp->layers[i]);
+        adam_w_free(&mlp->adam_w[i]);
     }
 
     if (mlp->layers) free(mlp->layers);
+    if (mlp->adam_w) free(mlp->adam_w);
 
     *mlp = (MLP){0};
 }
 
 static inline void mlp_push_layer(MLP* mlp, Layer layer) {
     assert(mlp);
-    mlp->layers = realloc(mlp->layers, ++mlp->layer_count * sizeof(Layer));
+    mlp->layer_count++;
+
+    mlp->layers = realloc(mlp->layers, mlp->layer_count * sizeof(Layer));
+    mlp->adam_w = realloc(mlp->adam_w, mlp->layer_count * sizeof(AdamW));
+    
     mlp->layers[mlp->layer_count - 1] = layer;
+    mlp->adam_w[mlp->layer_count - 1] = adam_w_new(layer_get_shape(&layer));
 }
 
 #ifdef __cplusplus
