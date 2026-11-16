@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include "mlp.h"
+#include "minuscule.h"
 
 int main(void) {
     MLP mlp = mlp_new();
