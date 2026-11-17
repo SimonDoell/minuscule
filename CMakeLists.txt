@@ -10,6 +10,12 @@ add_executable(minuscule
   src/main.c
 )
 
-target_compile_options(minuscule PRIVATE -Wall -Werror -Wpedantic -Wno-unused)
+# find_package(OpenMP REQUIRED)
+# target_link_libraries(minuscule PRIVATE OpenMP::OpenMP_C)
+
+target_compile_options(minuscule PRIVATE
+  -fopenmp -Wall -Werror
+  -Wpedantic -Wno-unused
+)
 
 target_link_libraries(minuscule PRIVATE m)

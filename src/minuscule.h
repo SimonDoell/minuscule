@@ -168,9 +168,9 @@ static inline float* mat_at_mut(Matrix* m, u32 row, u32 col) {
 }
 
 static inline void _mat_mul_into_nn(const Matrix* restrict a, const Matrix* restrict b, Matrix* restrict out) {
-    for (i32 i = 0; i < a->rows; ++i) {
-        for (i32 k = 0; k < b->cols; ++k) {
-            for (i32 j = 0; j < a->cols; ++j) {
+    for (i32 k = 0; k < b->cols; ++k) {
+        for (i32 j = 0; j < a->cols; ++j) {
+            for (i32 i = 0; i < a->rows; ++i) {
                 *mat_at_mut(out, i, k) +=
                     mat_at(a, i, j) *
                     mat_at(b, j, k);
@@ -653,5 +653,7 @@ static inline void mlp_train(MLP* mlp, const Matrix* input, const Matrix* desire
 
 
 // ToDo:
-// - Add backpropagation to the MLP (Complete matrix multiplications!)
 // - cosine lr decay
+// - add optional multithreading using macros (openMP!)
+// - simd
+// - better random numbers using pcg32
