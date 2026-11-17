@@ -399,6 +399,14 @@ float relu_derivative(float x) {
     return (x >= 0.0 ? 1.0 : 0.0);
 }
 
+float leaky_relu(float x) {
+    return MAX(x, x * 0.1f);
+}
+
+float leaky_relu_derivative(float x) {
+    return (x >= 0.0 ? 1.0 : 0.1);
+}
+
 static inline Layer activation_new(u32 fan_in, Function forward, Function derivative) {
     Layer layer;
     layer.layer_type = ActivationFunction;

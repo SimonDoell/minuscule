@@ -11,13 +11,19 @@ int main(void) {
     
     MLP mlp = mlp_new();
 
-    mlp_push_layer(&mlp, linear_new(1, 64, Kaiming));
+    mlp_push_layer(&mlp, linear_new(1, 64, Xavier));
     mlp_push_layer(&mlp, biases_new(64));
-    mlp_push_layer(&mlp, activation_new(64, relu, relu_derivative));
-    mlp_push_layer(&mlp, linear_new(64, 64, Kaiming));
+    mlp_push_layer(&mlp, activation_new(64, leaky_relu, leaky_relu_derivative));
+    mlp_push_layer(&mlp, linear_new(64, 64, Xavier));
     mlp_push_layer(&mlp, biases_new(64));
-    mlp_push_layer(&mlp, activation_new(64, relu, relu_derivative));
-    mlp_push_layer(&mlp, linear_new(64, 1, Kaiming));
+    mlp_push_layer(&mlp, activation_new(64, leaky_relu, leaky_relu_derivative));
+    mlp_push_layer(&mlp, linear_new(64, 64, Xavier));
+    mlp_push_layer(&mlp, biases_new(64));
+    mlp_push_layer(&mlp, activation_new(64, leaky_relu, leaky_relu_derivative));
+    mlp_push_layer(&mlp, linear_new(64, 64, Xavier));
+    mlp_push_layer(&mlp, biases_new(64));
+    mlp_push_layer(&mlp, activation_new(64, leaky_relu, leaky_relu_derivative));
+    mlp_push_layer(&mlp, linear_new(64, 1, Xavier));
 
     Matrix input  = mat_new(1, 1);
     Matrix output = mat_new(1, 1);
