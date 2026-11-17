@@ -14,15 +14,19 @@ int main(void) {
     mlp_push_layer(&mlp, linear_new(1, 64, Xavier));
     mlp_push_layer(&mlp, biases_new(64));
     mlp_push_layer(&mlp, activation_new(64, leaky_relu, leaky_relu_derivative));
+
     mlp_push_layer(&mlp, linear_new(64, 64, Xavier));
     mlp_push_layer(&mlp, biases_new(64));
     mlp_push_layer(&mlp, activation_new(64, leaky_relu, leaky_relu_derivative));
+
     mlp_push_layer(&mlp, linear_new(64, 64, Xavier));
     mlp_push_layer(&mlp, biases_new(64));
     mlp_push_layer(&mlp, activation_new(64, leaky_relu, leaky_relu_derivative));
+
     mlp_push_layer(&mlp, linear_new(64, 64, Xavier));
     mlp_push_layer(&mlp, biases_new(64));
     mlp_push_layer(&mlp, activation_new(64, leaky_relu, leaky_relu_derivative));
+
     mlp_push_layer(&mlp, linear_new(64, 1, Xavier));
 
     Matrix input  = mat_new(1, 1);

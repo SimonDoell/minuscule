@@ -279,9 +279,9 @@ typedef struct {
     LayerType layer_type;
 
     union {
-        LinearLayer linear;
-        BiasesLayer biases;
-        ActivationLayer activation;
+        LinearLayer      linear;
+        BiasesLayer      biases;
+        ActivationLayer  activation;
     } data;
 
     bool requires_optimizer;
