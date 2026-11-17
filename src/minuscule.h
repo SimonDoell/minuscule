@@ -124,6 +124,13 @@ static inline void mat_clone_into(const Matrix* src, Matrix* dest) {
         dest->values[i] = src->values[i];
 }
 
+static inline void mat_move_into(Matrix* src, Matrix* dest) {
+    if (!mat_is_empty(dest)) mat_free(dest);
+
+    *dest = *src;
+    *src  = mat_empty();
+} 
+
 static inline void mat_add_into(const Matrix* a, const Matrix* b, Matrix* out) {
     assert(a->rows == b->rows);
     assert(a->cols == b->cols);
@@ -173,7 +180,15 @@ static inline void _mat_mul_into_nn(const Matrix* restrict a, const Matrix* rest
 }
 
 static inline void _mat_mul_into_tn(const Matrix* restrict a, const Matrix* restrict b, Matrix* restrict out) {
-    abort();
+    for (i32 i = 0; i < a->cols; ++i) {
+        for (i32 k = 0; k < b->cols; ++k) {
+            for (i32 j = 0; j < a->rows; ++j) {
+                *mat_at_mut(out, i, k) +=
+                    mat_at(a, j, i) *
+                    mat_at(b, j, k);
+            }
+        }
+    }
 }
 
 static inline void _mat_mul_into_nt(const Matrix* restrict a, const Matrix* restrict b, Matrix* restrict out) {
@@ -208,6 +223,11 @@ static inline void mat_mul_into(const Matrix* restrict a, const Matrix* restrict
         case (1 << 1 | 1 << 0): _mat_mul_into_tt(a, b, out); break;
         default: abort();
     }
+}
+
+static inline void mat_mulf(Matrix* m, float f) {
+    for (u32 i = 0; i < mat_elem_count(m); ++i)
+        m->values[i] *= f;
 }
 
 static inline void mat_pretty_print(const Matrix* m, const char* optional_name) {
@@ -267,7 +287,15 @@ typedef struct {
     bool requires_optimizer;
 } Layer;
 
-static inline Layer linear_new(u32 fan_in, u32 fan_out) {
+typedef enum {
+    Xavier, Kaiming
+} InitOptions;
+
+static inline float rand_float(float min, float max) {
+    return (float)rand() / (float)RAND_MAX * (max - min) + min;
+}
+
+static inline Layer linear_new(u32 fan_in, u32 fan_out, InitOptions init_options) {
     Layer layer;
     layer.layer_type = Linear;
     layer.requires_optimizer = true;
@@ -277,6 +305,20 @@ static inline Layer linear_new(u32 fan_in, u32 fan_out) {
         .grad_weights      = mat_new(fan_out, fan_in),
         .cached_activation = mat_new(fan_in, 1),
     };
+
+    switch (init_options) {
+        case Xavier: {
+            float range = sqrtf(6.0 / (fan_in + fan_out));
+            for (u32 i = 0; i < mat_elem_count(&layer.data.linear.weights); ++i)
+                layer.data.linear.weights.values[i] = rand_float(-range, range);
+        } break;
+        case Kaiming: {
+            float range = sqrtf(2.0 / fan_in);
+            for (u32 i = 0; i < mat_elem_count(&layer.data.linear.weights); ++i)
+                layer.data.linear.weights.values[i] = rand_float(0, range);
+        } break;
+        default: abort();
+    }
 
     return layer;
 }
@@ -294,6 +336,23 @@ static inline void linear_free(LinearLayer* linear) {
 static inline void linear_forward(LinearLayer* linear, Matrix* inout, bool train) {
     mat_clone_into(inout, &linear->cached_activation);
     mat_mul_into(&linear->weights, &linear->cached_activation, inout, false, false, true);
+}
+
+static inline void linear_backward(LinearLayer* linear, Matrix* inout) {
+    assert(linear->weights.rows == inout->rows);
+    
+    Matrix prev_grad = mat_empty();
+    mat_mul_into(&linear->weights, inout, &prev_grad, true, false, true);
+
+    for (u32 j = 0; j < linear->weights.cols; ++j) {
+        for (u32 i = 0; i < linear->weights.rows; ++i) {
+            *mat_at_mut(&linear->grad_weights, i, j) +=
+                mat_at(&linear->cached_activation, j, 0) *
+                mat_at(inout, i, 0);
+        }
+    }
+    
+    mat_move_into(&prev_grad, inout);
 }
 
 static inline Layer biases_new(u32 fan_in) {
@@ -323,6 +382,13 @@ static inline void biases_free(BiasesLayer* biases) {
 static inline void biases_forward(BiasesLayer* biases, Matrix* inout, bool train) {
     if (train) mat_clone_into(inout, &biases->cached_activation);
     mat_add_into(inout, &biases->biases, inout);
+}
+
+static inline void biases_backward(BiasesLayer* biases, Matrix* inout) {
+    assert(biases->biases.rows == inout->rows);
+    assert(biases->biases.cols == inout->cols);
+
+    mat_add_into(&biases->grad_biases, inout, &biases->grad_biases);
 }
 
 float relu(float x) {
@@ -360,6 +426,14 @@ static inline void activation_forward(ActivationLayer* activation, Matrix* inout
         inout->values[i] = activation->forward(inout->values[i]);
 }
 
+static inline void activation_backward(ActivationLayer* activation, Matrix* inout) {
+    assert(activation->cached_activation.rows == inout->rows);
+    assert(activation->cached_activation.cols == inout->cols);
+
+    for (u32 i = 0; i < mat_elem_count(inout); ++i)
+        inout->values[i] *= activation->deriavtive(activation->cached_activation.values[i]);
+}
+
 static inline void layer_free(Layer* layer) {
     assert(layer);
     switch (layer->layer_type) {
@@ -380,7 +454,12 @@ static inline void layer_forward(Layer* layer, Matrix* inout /*activation*/, boo
 }
 
 static inline void layer_backward(Layer* layer, Matrix* inout /*gradient*/) {
-    abort();
+    switch (layer->layer_type) {
+        case Linear: {linear_backward(&layer->data.linear, inout);} break;
+        case Biases: {biases_backward(&layer->data.biases, inout);} break;
+        case ActivationFunction: {activation_backward(&layer->data.activation, inout);} break;
+        default: abort();
+    }
 }
 
 typedef struct {
@@ -531,6 +610,7 @@ static inline void _mlp_apply_gradients(MLP* mlp) {
         
         ParamGrad param_grad = layer_get_param_gradient(&mlp->layers[i]);
         adam_w_update(&mlp->adam_w[i], param_grad.param, param_grad.gradient, mlp->betta_1, mlp->betta_2, mlp->lambda, mlp->lr, mlp->t);
+        mat_zero(param_grad.gradient);
     }
 }
 
@@ -543,9 +623,12 @@ static inline void mlp_train(MLP* mlp, const Matrix* input, const Matrix* desire
         layer_forward(&mlp->layers[i], &activation, true);
 
     mat_sub_into(&activation, desired_output, &activation); // MSE derivative
+    mat_mulf(&activation, 1.0f / (float)mlp->mini_batch);
 
     for (i32 i = mlp->layer_count - 1; i >= 0; --i)
         layer_backward(&mlp->layers[i], &activation);
+
+    mat_free(&activation);
 
     if ((mlp->t % mlp->mini_batch) == 0) {
         _mlp_apply_gradients(mlp);
@@ -562,4 +645,5 @@ static inline void mlp_train(MLP* mlp, const Matrix* input, const Matrix* desire
 
 
 // ToDo:
+// - Add backpropagation to the MLP (Complete matrix multiplications!)
 // - cosine lr decay
