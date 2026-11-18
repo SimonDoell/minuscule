@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
-// #include <pthread.h>
 
 #ifndef countof
 #define countof(arr) (sizeof(arr) / sizeof(arr[0]))
@@ -470,6 +469,7 @@ static inline void softmax_free(SoftmaxLayer* softmax) {
 
 static inline void softmax_forward(SoftmaxLayer* softmax, Matrix* inout, bool train) {
     assert(softmax->cached_activation.rows == inout->rows && inout->cols == 1);
+    assert(softmax->temp > 0.0f);
     const u32 n = softmax->cached_activation.rows;
     if (train) mat_clone_into(inout, &softmax->cached_activation);
 
@@ -482,7 +482,7 @@ static inline void softmax_forward(SoftmaxLayer* softmax, Matrix* inout, bool tr
     float exps[n];
 
     for (u32 i = 0; i < n; ++i)
-        exps[i] = powf(expf(inout->values[i] - max), softmax->temp);
+        exps[i] = expf((inout->values[i] - max) / softmax->temp);
 
     float sum = 0.0f;
     for (u32 i = 0; i < n; ++i)
