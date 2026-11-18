@@ -1,4 +1,5 @@
 #include <math.h>
+#include <float.h>
 #include <stdio.h>
 #include <assert.h>
 #include <stdint.h>
@@ -252,7 +253,7 @@ static inline void mat_pretty_print(const Matrix* m, const char* optional_name) 
 }
 
 typedef enum {
-    Linear, Biases, ActivationFunction,
+    Linear, Biases, ActivationFunction, Softmax,
 } LayerType;
 
 typedef struct {
@@ -276,12 +277,18 @@ typedef struct {
 } ActivationLayer;
 
 typedef struct {
+    Matrix cached_activation;
+    float temp;
+} SoftmaxLayer;
+
+typedef struct {
     LayerType layer_type;
 
     union {
         LinearLayer      linear;
         BiasesLayer      biases;
         ActivationLayer  activation;
+        SoftmaxLayer     softmax;
     } data;
 
     bool requires_optimizer;
@@ -442,12 +449,71 @@ static inline void activation_backward(ActivationLayer* activation, Matrix* inou
         inout->values[i] *= activation->deriavtive(activation->cached_activation.values[i]);
 }
 
+static inline Layer softmax_new(u32 fan_in, float temp) {
+    Layer layer;
+    layer.layer_type = Softmax;
+    layer.requires_optimizer = false;
+
+    layer.data.softmax = (SoftmaxLayer){
+        .temp = temp,
+        .cached_activation = mat_vec(fan_in),
+    };
+
+    return layer;
+}
+
+static inline void softmax_free(SoftmaxLayer* softmax) {
+    assert(softmax);
+    mat_free(&softmax->cached_activation);
+    *softmax = (SoftmaxLayer){0};
+}
+
+static inline void softmax_forward(SoftmaxLayer* softmax, Matrix* inout, bool train) {
+    assert(softmax->cached_activation.rows == inout->rows && inout->cols == 1);
+    const u32 n = softmax->cached_activation.rows;
+    if (train) mat_clone_into(inout, &softmax->cached_activation);
+
+    float max = -FLT_MAX;
+
+    for (u32 i = 0; i < n; ++i)
+        if (inout->values[i] > max)
+            max = inout->values[i];
+
+    float exps[n];
+
+    for (u32 i = 0; i < n; ++i)
+        exps[i] = powf(expf(inout->values[i] - max), softmax->temp);
+
+    float sum = 0.0f;
+    for (u32 i = 0; i < n; ++i)
+        sum += exps[i];
+
+    for (u32 i = 0; i < n; ++i)
+        inout->values[i] = exps[i] / sum;
+}
+
+static inline void softmax_backward(SoftmaxLayer* softmax, Matrix* inout) {
+    const u32 n = softmax->cached_activation.rows;
+    assert(inout->rows == n && inout->cols == 1);
+
+    float dot = 0.0f;
+
+    for (u32 i = 0; i < n; ++i)
+        dot += inout->values[i] * softmax->cached_activation.values[i];
+
+    for (u32 i = 0; i < n; ++i) {
+        const float y = softmax->cached_activation.values[i];
+        inout->values[i] = y * (inout->values[i] - dot) / softmax->temp;
+    }
+}
+
 static inline void layer_free(Layer* layer) {
     assert(layer);
     switch (layer->layer_type) {
         case Linear: linear_free(&layer->data.linear); break;
         case Biases: biases_free(&layer->data.biases); break;
         case ActivationFunction: activation_free(&layer->data.activation); break;
+        case Softmax: softmax_free(&layer->data.softmax); break;
         default: abort();
     }
 }
@@ -457,6 +523,7 @@ static inline void layer_forward(Layer* layer, Matrix* inout /*activation*/, boo
         case Linear: {linear_forward(&layer->data.linear, inout, train);} break;
         case Biases: {biases_forward(&layer->data.biases, inout, train);} break;
         case ActivationFunction: {activation_forward(&layer->data.activation, inout, train);} break;
+        case Softmax: {softmax_forward(&layer->data.softmax, inout, train);} break;
         default: abort();
     }
 }
@@ -466,6 +533,7 @@ static inline void layer_backward(Layer* layer, Matrix* inout /*gradient*/) {
         case Linear: {linear_backward(&layer->data.linear, inout);} break;
         case Biases: {biases_backward(&layer->data.biases, inout);} break;
         case ActivationFunction: {activation_backward(&layer->data.activation, inout);} break;
+        case Softmax: {softmax_backward(&layer->data.softmax, inout);} break;
         default: abort();
     }
 }
@@ -499,6 +567,7 @@ static inline LayerInfo layer_get_shape(const Layer* layer) {
         case Linear: return (LayerInfo){.fan_in = layer->data.linear.weights.cols, .fan_out = layer->data.linear.weights.rows}; break;
         case Biases: return (LayerInfo){.fan_in = layer->data.biases.biases .cols, .fan_out = layer->data.biases.biases .rows}; break;
         case ActivationFunction: return (LayerInfo){0}; break;
+        case Softmax: return (LayerInfo){.fan_in = layer->data.softmax.cached_activation.rows, .fan_out = layer->data.softmax.cached_activation.rows}; break;
         default: abort();
     }
 }
@@ -645,6 +714,27 @@ static inline void mlp_train(MLP* mlp, const Matrix* input, const Matrix* desire
     mlp->t++;
 }
 
+
+typedef struct {
+    MLP actor;
+    MLP critic;
+} PPO;
+
+static inline PPO ppo_new(void) {
+    return (PPO){
+        .actor  = mlp_new(),
+        .critic = mlp_new(),
+    };
+}
+
+static inline void ppo_free(PPO* ppo) {
+    assert(ppo);
+    mlp_free(&ppo->actor);
+    mlp_free(&ppo->critic);
+    *ppo = (PPO){0};
+}
+
+
 #ifdef __cplusplus
 }
 #endif
@@ -657,3 +747,4 @@ static inline void mlp_train(MLP* mlp, const Matrix* input, const Matrix* desire
 // - add optional multithreading using macros (openMP!)
 // - simd
 // - better random numbers using pcg32
+// - PPO implementation
