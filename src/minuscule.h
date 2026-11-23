@@ -194,8 +194,6 @@ void mlp_train(MLP* mlp, Matrix const* input, Matrix const* desired_output);
 
 #endif // MINUSCULE_H
 
-#define MINUSCULE_IMPLEMENTATION
-
 // --- Implementation --
 #ifdef MINUSCULE_IMPLEMENTATION
 #undef MINUSCULE_IMPLEMENTATION
