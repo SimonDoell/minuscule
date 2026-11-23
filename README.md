@@ -1,0 +1,17 @@
+# Minuscule
+
+_This is a work in progress_
+
+## ToDo:
+- learning rate schedulers (e.g. cosine weight decay)
+- cached matricis inside the layers to avoid re-allocation inside forward/backward
+- softmax layer
+- layernorm layer
+- dropout layer
+- add the options for a differnet optimizer using tagged enums (e.g. SGD, cross-entropy, RMSProp)
+- gradient clipping
+- differnt loss functions
+- residual connections?
+- different activation functions
+- arena allocator
+- model serialization (saving and loading to/from file)
