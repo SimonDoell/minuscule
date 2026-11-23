@@ -1,3 +1,4 @@
+#include <time.h>
 #include <stdio.h>
 #define MINUS_IMPLEMENTATION
 #include "minuscule.h"
@@ -11,20 +12,22 @@ static inline float relu_derivative(float x) {
 }
 
 int main(void) {
+    srand(time(0));
+    
     MLP mlp = mlp_new();
 
-    mlp_push_layer(&mlp, dense_new(1, 16));
+    mlp_push_layer(&mlp, dense_new(1, 16, DENSE_INIT_KAIMING));
     mlp_push_layer(&mlp, activation_new(16, relu, relu_derivative));
-    mlp_push_layer(&mlp, dense_new(16, 16));
+    mlp_push_layer(&mlp, dense_new(16, 16, DENSE_INIT_KAIMING));
     mlp_push_layer(&mlp, activation_new(16, relu, relu_derivative));
-    mlp_push_layer(&mlp, dense_new(16, 1));
+    mlp_push_layer(&mlp, dense_new(16, 1, DENSE_INIT_KAIMING));
 
     Matrix input  = mat_new(1, 1);
     Matrix output = mat_new(1, 1);
 
     for (uint32_t i = 0; i < 1000; ++i) {
         input.values [0] = 0.5f;
-        output.values[0] = 0.31415f;
+        output.values[0] = 0.3141526f;
         mlp_train(&mlp, &input, &output);
 
         mlp_forward(&mlp, &input);

@@ -94,7 +94,12 @@ typedef struct {
     Layer* layers;
 } MLP;
 
-Layer dense_new(uint32_t fan_in, uint32_t fan_out);
+typedef enum {
+    DENSE_INIT_XAVIER,
+    DENSE_INIT_KAIMING,
+} DenseInitOption;
+
+Layer dense_new(uint32_t fan_in, uint32_t fan_out, DenseInitOption init_option);
 void dense_free(DenseLayer* dense);
 void dense_forward (DenseLayer* dense, Matrix* inout, bool train, uint32_t fan_in, uint32_t fan_out);
 void dense_backward(DenseLayer* dense, Matrix* inout, uint32_t fan_in, uint32_t fan_out);
@@ -346,7 +351,7 @@ void parameter_step(Parameter* parameter, float lr, float betta_1, float betta_2
     mat_zero(&parameter->gradient);
 }
 
-Layer dense_new(uint32_t fan_in, uint32_t fan_out) {
+Layer dense_new(uint32_t fan_in, uint32_t fan_out, DenseInitOption init_option) {
     Layer layer;
     layer.type    = LAYER_DENSE;
     layer.fan_in  = fan_in;
@@ -357,9 +362,22 @@ Layer dense_new(uint32_t fan_in, uint32_t fan_out) {
         .cached_activation = mat_new(fan_out, 1),
     };
 
-    for (uint32_t i = 0; i < mat_elem_count(&layer.data.dense.weights.value); ++i)
-        layer.data.dense.weights.value.values[i] = (float)rand() / (float)RAND_MAX * 2.0f - 1.0f; // TODO: Xavier/Kaiming Initilization
-    
+    switch (init_option) {
+        case DENSE_INIT_XAVIER:  {
+            float range = sqrtf(6.0 / (fan_in + fan_out));
+            for (uint32_t i = 0; i < mat_elem_count(&layer.data.dense.weights.value); ++i)
+                layer.data.dense.weights.value.values[i] = ((float)rand() / (float)RAND_MAX * 2.0f - 1.0f) * range;
+            break;
+        }
+        case DENSE_INIT_KAIMING: {
+            float range = sqrtf(2.0 / fan_in);
+            for (uint32_t i = 0; i < mat_elem_count(&layer.data.dense.weights.value); ++i)
+                layer.data.dense.weights.value.values[i] = ((float)rand() / (float)RAND_MAX) * range;
+            break;
+        }
+        default: abort(); // unreachable
+    }
+
     return layer;
 }
 
