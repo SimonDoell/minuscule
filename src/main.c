@@ -3,30 +3,49 @@
 #define MINUS_IMPLEMENTATION
 #include "minuscule.h"
 
-static inline float relu(float x) {
-    return (x > 0 ? x : 0);
+static inline float leaky_relu(float x) {
+    return (x > 0 ? x : 0.1f * x);
 }
 
-static inline float relu_derivative(float x) {
-    return (x > 0 ? 1 : 0);
+static inline float leaky_relu_derivative(float x) {
+    return (x > 0 ? 1 : 0.1f);
+}
+
+static inline float sigmoid(float x) {
+    return 1.0f / (1.0f + expf(x));
+}
+
+static inline float sigmoid_derivative(float x) {
+    float s = sigmoid(x);
+    return s * (1 - s);
 }
 
 int main(void) {
     srand(time(0));
     
     MLP mlp = mlp_new();
+    mlp.lr            = 0.005f,
+    mlp.betta_1       = 0.9f,
+    mlp.betta_2       = 0.999f,
+    mlp.lambda        = 0.001f,
+    mlp.mini_batch    = 4,
+    mlp.loss_function = LOSS_CATEGORICAL_CROSS_ENTROPY;
 
     mlp_push_layer(&mlp, dense_new(1, 16, DENSE_INIT_KAIMING));
-    mlp_push_layer(&mlp, activation_new(16, relu, relu_derivative));
     mlp_push_layer(&mlp, layernorm_new(16));
+    mlp_push_layer(&mlp, activation_new(16, leaky_relu, leaky_relu_derivative));
+    mlp_push_layer(&mlp, softmax_new(16, 1.0f));
 
-    for (uint32_t i = 0; i < 5; ++i) {
+    for (uint32_t i = 0; i < 15; ++i) {
         mlp_push_layer(&mlp, dense_new(16, 16, DENSE_INIT_KAIMING));
-        mlp_push_layer(&mlp, activation_new(16, relu, relu_derivative));
         mlp_push_layer(&mlp, layernorm_new(16));
+        mlp_push_layer(&mlp, activation_new(16, leaky_relu, leaky_relu_derivative));
+        mlp_push_layer(&mlp, softmax_new(16, 1.0f));
     }
 
     mlp_push_layer(&mlp, dense_new(16, 1, DENSE_INIT_KAIMING));
+    mlp_push_layer(&mlp, softmax_new(1, 1.0f));
+    
 
     Matrix input  = mat_new(1, 1);
     Matrix output = mat_new(1, 1);

@@ -6,9 +6,9 @@ _This is a work in progress_
 - learning rate schedulers (e.g. cosine weight decay)
 - cached matricis inside the layers to avoid re-allocation inside forward/backward
 - dropout layer
-- add the options for a differnet optimizer using tagged enums (e.g. SGD, cross-entropy, RMSProp)
+- add the options for a differnet optimizer using tagged enums (e.g. SGD, RMSProp)
 - gradient clipping
-- differnt loss functions
+- different loss functions (MSE, MAE, Cross-Entropy)
 - residual connections?
 - different activation functions
 - arena allocator

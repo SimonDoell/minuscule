@@ -101,8 +101,16 @@ typedef struct {
     } data;
 } Layer;
 
+typedef enum {
+    LOSS_MSE,
+    LOSS_MAE,
+    LOSS_BINARY_CROSS_ENTROPY,
+    LOSS_CATEGORICAL_CROSS_ENTROPY, // can only be used with > 1 output features
+} LossFunction;
+
 typedef struct {
     float lr;
+    LossFunction loss_function;
     float betta_1;
     float betta_2;
     float lambda;
@@ -715,6 +723,7 @@ MLP mlp_new(void) {
         .betta_2    = 0.999f,
         .lambda     = 0.001f,
         .mini_batch = 4,
+        .loss_function = LOSS_MSE,
 
         .t = 1,
         .optimizer_step = 0,
@@ -773,7 +782,54 @@ void mlp_train(MLP* mlp, Matrix const* input, Matrix const* desired_output) {
 
     mlp_forward_helper(mlp, &inout, true);
 
-    mat_sub_into(desired_output, &inout); // MSE derivatives
+    switch (mlp->loss_function) {
+        case LOSS_MSE: {
+            const uint32_t n = mat_elem_count(&inout);
+            
+            for (uint32_t i = 0; i < n; ++i) {
+                const float y = desired_output->values[i];
+                const float p = inout.values[i];
+                
+                inout.values[i] = (p - y);
+            }
+            break;
+        }
+        case LOSS_MAE: {
+            const uint32_t n = mat_elem_count(&inout);
+            
+            for (uint32_t i = 0; i < n; ++i) {
+                const float y = desired_output->values[i];
+                const float p = inout.values[i];
+                
+                inout.values[i] = (p > y ? 1 : -1);
+            }
+            break;
+        }
+        case LOSS_BINARY_CROSS_ENTROPY: {
+            const uint32_t n = mat_elem_count(&inout);
+            
+            for (uint32_t i = 0; i < n; ++i) {
+                const float y = desired_output->values[i];
+                const float p = inout.values[i];
+
+                inout.values[i] = (p - y) / (p * (1 - p));
+            }
+            break;
+        }
+        case LOSS_CATEGORICAL_CROSS_ENTROPY: {
+            const uint32_t n = mat_elem_count(&inout);
+            
+            for (uint32_t i = 0; i < n; ++i) {
+                const float y = desired_output->values[i];
+                const float p = inout.values[i];
+
+                inout.values[i] = -y * logf(p);
+            }
+            break;
+        }
+        default: abort();
+    }
+
     mat_mulf(&inout, 1.0f / (float)mlp->mini_batch);
 
     mlp_backward(mlp, &inout);
