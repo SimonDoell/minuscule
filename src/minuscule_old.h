@@ -466,7 +466,7 @@ static inline Layer softmax_new(u32 fan_in, float temp) {
 }
 
 static inline void softmax_free(SoftmaxLayer* softmax) {
-    assert(soft);
+    assert(softmax);
     mat_free(&softmax->cached_activation);
     *softmax = (SoftmaxLayer){0};
 }
