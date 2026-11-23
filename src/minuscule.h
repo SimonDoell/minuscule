@@ -43,7 +43,7 @@ typedef struct {
 } AdamW;
 
 typedef struct {
-    Matrix param;
+    Matrix value;
     Matrix gradient;
     AdamW optimizer;
 } Parameter;
@@ -88,7 +88,7 @@ typedef struct {
     float betta_2;
     float lambda;
     uint32_t mini_batch;
-    uint32_t t;
+    uint32_t t, optimizer_step;
 
     uint32_t layer_count;
     Layer* layers;
@@ -163,7 +163,7 @@ void mat_ensure_shape(Matrix* m, uint32_t rows, uint32_t cols) {
 
     if (m->rows == rows && m->cols == cols) return;
 
-    mat_free(m);
+    if (m->values) mat_free(m);
     *m = mat_new(rows, cols);
 }
 
@@ -185,11 +185,15 @@ static inline uint32_t mat_index(uint32_t row, uint32_t col, uint32_t rows) {
 
 float mat_at_const(Matrix const* m, uint32_t row, uint32_t col) {
     assert(m);
+    assert(row < m->rows);
+    assert(col < m->cols);
     return m->values[mat_index(row, col, m->rows)];
 }
 
 float* mat_at(Matrix* m, uint32_t row, uint32_t col) {
     assert(m);
+    assert(row < m->rows);
+    assert(col < m->cols);
     return &m->values[mat_index(row, col, m->rows)];
 }
 
@@ -280,6 +284,8 @@ void mat_mul_into(Matrix const* a, Matrix const* b, Matrix* out, bool transpose_
     
     mat_ensure_shape(out, a_rows, b_cols);
 
+    if (zero) mat_zero(out);
+
     uint8_t flags = (transpose_a << 1) | (transpose_b << 0);
 
     switch (flags) {
@@ -293,7 +299,7 @@ void mat_mul_into(Matrix const* a, Matrix const* b, Matrix* out, bool transpose_
 
 Parameter parameter_new(uint32_t rows, uint32_t cols) {
     return (Parameter){
-        .param     = mat_new(rows, cols),
+        .value     = mat_new(rows, cols),
         .gradient  = mat_new(rows, cols),
         .optimizer = (AdamW){
             .momentum = mat_new(rows, cols),
@@ -304,7 +310,7 @@ Parameter parameter_new(uint32_t rows, uint32_t cols) {
 
 void parameter_free(Parameter* parameter) {
     assert(parameter);
-    mat_free(&parameter->param);
+    mat_free(&parameter->value);
     mat_free(&parameter->gradient);
     mat_free(&parameter->optimizer.momentum);
     mat_free(&parameter->optimizer.variance);
@@ -313,16 +319,16 @@ void parameter_free(Parameter* parameter) {
 
 void parameter_step(Parameter* parameter, float lr, float betta_1, float betta_2, float lambda, uint32_t t) {
     assert(parameter);
-    assert(mat_same_shape(&parameter->param, &parameter->gradient));
-    assert(mat_same_shape(&parameter->param, &parameter->optimizer.momentum));
-    assert(mat_same_shape(&parameter->param, &parameter->optimizer.variance));
+    assert(mat_same_shape(&parameter->value, &parameter->gradient));
+    assert(mat_same_shape(&parameter->value, &parameter->optimizer.momentum));
+    assert(mat_same_shape(&parameter->value, &parameter->optimizer.variance));
 
     const float betta_1_t = 1.0 - powf(betta_1, t);
     const float betta_2_t = 1.0 - powf(betta_2, t);
 
-    const uint32_t n = mat_elem_count(&parameter->param);
+    const uint32_t n = mat_elem_count(&parameter->value);
 
-    float* const w = parameter->param.values;
+    float* const w = parameter->value.values;
     float* const g = parameter->gradient.values;
     float* const m = parameter->optimizer.momentum.values;
     float* const v = parameter->optimizer.variance.values;
@@ -351,8 +357,8 @@ Layer dense_new(uint32_t fan_in, uint32_t fan_out) {
         .cached_activation = mat_new(fan_out, 1),
     };
 
-    for (uint32_t i = 0; i < mat_elem_count(&layer.data.dense.weights.param); ++i)
-        layer.data.dense.weights.param.values[i] = (float)rand() / (float)RAND_MAX * 2.0f - 1.0f; // TODO: Xavier/Kaiming Initilization
+    for (uint32_t i = 0; i < mat_elem_count(&layer.data.dense.weights.value); ++i)
+        layer.data.dense.weights.value.values[i] = (float)rand() / (float)RAND_MAX * 2.0f - 1.0f; // TODO: Xavier/Kaiming Initilization
     
     return layer;
 }
@@ -373,8 +379,8 @@ void dense_forward(DenseLayer* dense, Matrix* inout, bool train, uint32_t fan_in
 
     Matrix temp = mat_new(fan_out, 1);
 
-    mat_mul_into(&dense->weights.param, inout, &temp, false, false, true);
-    mat_add_into(&dense->biases.param, &temp);
+    mat_mul_into(&dense->weights.value, inout, &temp, false, false, true);
+    mat_add_into(&dense->biases.value, &temp);
 
     mat_move_into(&temp, inout);
 }
@@ -383,8 +389,8 @@ void dense_backward(DenseLayer* dense, Matrix* inout, uint32_t fan_in, uint32_t 
     assert(dense);
     assert(inout);
 
-    Matrix prev_grad = mat_new(inout->rows, 1);
-    mat_mul_into(&dense->weights.param, inout, &prev_grad, true, false, true);
+    Matrix prev_grad = mat_new(fan_in, 1);
+    mat_mul_into(&dense->weights.value, inout, &prev_grad, true, false, true);
 
     mat_add_into(inout, &dense->biases.gradient);
 
@@ -439,7 +445,7 @@ void activation_backward(ActivationLayer* activation, Matrix* inout, uint32_t fa
     assert(inout);
 
     for (uint32_t i = 0; i < mat_elem_count(inout); ++i)
-        inout->values[i] *= activation->derivative(inout->values[i]);
+        inout->values[i] *= activation->derivative(activation->cached_activation.values[i]);
 }
 
 void layer_forward(Layer* layer, Matrix* inout, bool train, uint32_t fan_in, uint32_t fan_out) {
@@ -494,6 +500,7 @@ MLP mlp_new(void) {
         .mini_batch = 4,
 
         .t = 1,
+        .optimizer_step = 0,
         .layer_count = 0,
         .layers = NULL,
     };
@@ -550,16 +557,18 @@ void mlp_train(MLP* mlp, Matrix const* input, Matrix const* desired_output) {
     mlp_forward_helper(mlp, &inout, true);
 
     mat_sub_into(desired_output, &inout);
+    mat_mulf(&inout, 1.0f / (float)mlp->mini_batch);
 
     mlp_backward(mlp, &inout);
 
     mat_free(&inout);
 
-    if ((mlp->t % mlp->mini_batch) == 0)
+    if ((mlp->optimizer_step % mlp->mini_batch) == 0) {
         for (uint32_t i = 0; i < mlp->layer_count; ++i)
             layer_step(&mlp->layers[i], mlp->lr, mlp->betta_1, mlp->betta_2, mlp->lambda, mlp->t);
-    
-    mlp->t++;
+
+        mlp->t++;
+    }
 }
 
 #ifdef __cplusplus
