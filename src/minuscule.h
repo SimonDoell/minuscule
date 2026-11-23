@@ -85,7 +85,7 @@ typedef struct {
 
 typedef struct {
     float temp;
-    Matrix cached_activation;
+    Matrix cached_output;
 } SoftmaxLayer;
 
 typedef struct {
@@ -108,8 +108,35 @@ typedef enum {
     LOSS_CATEGORICAL_CROSS_ENTROPY, // can only be used with > 1 output features
 } LossFunction;
 
+typedef enum {
+    LEARNING_RATE_CONSTANT,
+    LEARNING_RATE_EXPONENTIAL,
+} LearningRateType;
+
 typedef struct {
-    float lr;
+    float learning_rate;
+} ConstantLearningRate;
+
+typedef struct {
+    float lr_begin;
+    float decay;
+} ExponentialLearningRate;
+
+typedef struct {
+    LearningRateType type;
+    union {
+        ConstantLearningRate     constant;
+        ExponentialLearningRate  exponential;
+    } data;
+} LearningRate;
+
+LearningRate constant_learning_rate(float lr);
+LearningRate exponential_learning_rate(float lr_begin, float decay);
+
+float get_learning_rate(LearningRate learning_rate, uint32_t step);
+
+typedef struct {
+    LearningRate learning_rate;
     LossFunction loss_function;
     float betta_1;
     float betta_2;
@@ -165,8 +192,9 @@ void mlp_train(MLP* mlp, Matrix const* input, Matrix const* desired_output);
 }
 #endif // __cplusplus
 
-#endif // MINUS_H
+#endif // MINUSCULE_H
 
+#define MINUSCULE_IMPLEMENTATION
 
 // --- Implementation --
 #ifdef MINUSCULE_IMPLEMENTATION
@@ -514,6 +542,9 @@ Layer layernorm_new(uint32_t fan_in) {
         .cached_input  = mat_new(fan_in, 1),
         .cached_output = mat_new(fan_in, 1),
     };
+    for (uint32_t i = 0; i < mat_elem_count(&layer.data.layernorm.scale.value); ++i)
+        layer.data.layernorm.scale.value.values[i] = 1.0f;
+    
     return layer;
 }
 
@@ -611,14 +642,14 @@ Layer softmax_new(uint32_t fan_in, float temp) {
     layer.fan_out = fan_in;
     layer.data.softmax = (SoftmaxLayer){
         .temp = temp,
-        .cached_activation = mat_new(fan_in, 1),
+        .cached_output = mat_new(fan_in, 1),
     };
     return layer;
 }
 
 void softmax_free(SoftmaxLayer* softmax) {
     assert(softmax);
-    mat_free(&softmax->cached_activation);
+    mat_free(&softmax->cached_output);
     *softmax = (SoftmaxLayer){0};
 }
 
@@ -628,8 +659,6 @@ void softmax_forward(SoftmaxLayer* softmax, Matrix* inout, bool train) {
     assert(inout->rows >= 1);
 
     const uint32_t n = mat_elem_count(inout);
-
-    if (train) mat_copy_into(inout, &softmax->cached_activation);
 
     float max = inout->values[0];
 
@@ -646,22 +675,24 @@ void softmax_forward(SoftmaxLayer* softmax, Matrix* inout, bool train) {
 
     for (uint32_t i = 0; i < n; ++i)
         inout->values[i] = exps[i] / sum;
+
+    if (train) mat_copy_into(inout, &softmax->cached_output);
 }
 
 void softmax_backward(SoftmaxLayer* softmax, Matrix* inout) {
     assert(softmax);
     assert(inout);
-    assert(softmax->cached_activation.rows == inout->rows);
+    assert(softmax->cached_output.rows == inout->rows);
 
     const uint32_t n = mat_elem_count(inout);
 
     float dot = 0.0f;
 
     for (uint32_t i = 0; i < n; ++i)
-        dot += inout->values[i] * softmax->cached_activation.values[i];
+        dot += inout->values[i] * softmax->cached_output.values[i];
 
     for (uint32_t i = 0; i < n; ++i)
-        inout->values[i] = softmax->cached_activation.values[i] * (inout->values[i] - dot) / softmax->temp;
+        inout->values[i] = softmax->cached_output.values[i] * (inout->values[i] - dot) / softmax->temp;
 }
 
 void layer_forward(Layer* layer, Matrix* inout, bool train) {
@@ -714,14 +745,41 @@ void layer_step(Layer* layer, float lr, float betta_1, float betta_2, float lamb
     }
 }
 
+LearningRate constant_learning_rate(float lr) {
+    return (LearningRate){
+        .type = LEARNING_RATE_CONSTANT,
+        .data.constant = (ConstantLearningRate){
+            .learning_rate = lr,
+        },
+    };
+}
+
+LearningRate exponential_learning_rate(float lr_begin, float decay) {
+    return (LearningRate){
+        .type = LEARNING_RATE_EXPONENTIAL,
+        .data.exponential = (ExponentialLearningRate){
+            .lr_begin = lr_begin,
+            .decay    = decay,
+        },
+    };
+}
+
+float get_learning_rate(LearningRate learning_rate, uint32_t step) {
+    switch (learning_rate.type) {
+        case LEARNING_RATE_CONSTANT: return learning_rate.data.constant.learning_rate;
+        case LEARNING_RATE_EXPONENTIAL: return learning_rate.data.exponential.lr_begin * powf(learning_rate.data.exponential.decay, step);
+        default: abort();  // unreachable
+    }
+}
+
 MLP mlp_new(void) {
     return (MLP){
-        .lr         = 0.005f,
-        .betta_1    = 0.9f,
-        .betta_2    = 0.999f,
-        .lambda     = 0.001f,
-        .mini_batch = 4,
-        .loss_function = LOSS_MSE,
+        .learning_rate  = constant_learning_rate(0.005f),
+        .loss_function  = LOSS_MSE,
+        .betta_1        = 0.9f,
+        .betta_2        = 0.999f,
+        .lambda         = 0.001f,
+        .mini_batch     = 4,
 
         .t = 1,
         .optimizer_step = 0,
@@ -821,7 +879,7 @@ void mlp_train(MLP* mlp, Matrix const* input, Matrix const* desired_output) {
                 const float y = desired_output->values[i];
                 const float p = inout.values[i];
 
-                inout.values[i] = -y * logf(p);
+                inout.values[i] = -y / p;
             }
             break;
         }
@@ -834,9 +892,13 @@ void mlp_train(MLP* mlp, Matrix const* input, Matrix const* desired_output) {
 
     mat_free(&inout);
 
+    float lr = get_learning_rate(mlp->learning_rate, mlp->optimizer_step);
+
+    mlp->optimizer_step++;
+
     if ((mlp->optimizer_step % mlp->mini_batch) == 0) {
         for (uint32_t i = 0; i < mlp->layer_count; ++i)
-            layer_step(&mlp->layers[i], mlp->lr, mlp->betta_1, mlp->betta_2, mlp->lambda, mlp->t);
+            layer_step(&mlp->layers[i], lr, mlp->betta_1, mlp->betta_2, mlp->lambda, mlp->t);
 
         mlp->t++;
     }
@@ -846,4 +908,4 @@ void mlp_train(MLP* mlp, Matrix const* input, Matrix const* desired_output) {
 }
 #endif // __cplusplus
 
-#endif // MINUS_IMPLEMENTATION
+#endif // MINUSCULE_IMPLEMENTATION
