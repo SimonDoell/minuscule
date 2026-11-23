@@ -55,12 +55,15 @@ void parameter_step(Parameter* parameter, float lr, float betta_1, float betta_2
 typedef enum {
     LAYER_DENSE,
     LAYER_ACTIVATION,
+    LAYER_LAYERNORM,
 } LayerType;
 
 typedef struct {
     Parameter weights;
     Parameter biases;
     Matrix cached_activation;
+    Matrix temp_output;
+    Matrix temp_gradient;
 } DenseLayer;
 
 typedef float(*Function)(float x);
@@ -72,6 +75,14 @@ typedef struct {
 } ActivationLayer;
 
 typedef struct {
+    Parameter scale;
+    Parameter shift;
+    Matrix cached_input;
+    Matrix cached_output;
+    float cached_mean, cached_std;
+} LaynormLayer;
+
+typedef struct {
     LayerType type;
     uint32_t fan_in;
     uint32_t fan_out;
@@ -79,6 +90,7 @@ typedef struct {
     union {
         DenseLayer dense;
         ActivationLayer activation;
+        LaynormLayer layernorm;
     } data;
 } Layer;
 
@@ -101,17 +113,23 @@ typedef enum {
 
 Layer dense_new(uint32_t fan_in, uint32_t fan_out, DenseInitOption init_option);
 void dense_free(DenseLayer* dense);
-void dense_forward (DenseLayer* dense, Matrix* inout, bool train, uint32_t fan_in, uint32_t fan_out);
-void dense_backward(DenseLayer* dense, Matrix* inout, uint32_t fan_in, uint32_t fan_out);
+void dense_forward (DenseLayer* dense, Matrix* inout, bool train);
+void dense_backward(DenseLayer* dense, Matrix* inout);
 void dense_step    (DenseLayer* dense, float lr, float betta_1, float betta_2, float lambda, uint32_t t);
 
 Layer activation_new(uint32_t fan_in, Function forward, Function derivative);
 void activation_free(ActivationLayer* activation);
-void activation_forward (ActivationLayer* activation, Matrix* inout, bool train, uint32_t fan_in, uint32_t fan_out);
-void activation_backward(ActivationLayer* activation, Matrix* inout, uint32_t fan_in, uint32_t fan_out);
+void activation_forward (ActivationLayer* activation, Matrix* inout, bool train);
+void activation_backward(ActivationLayer* activation, Matrix* inout);
 
-void layer_forward (Layer* layer, Matrix* inout, bool train, uint32_t fan_in, uint32_t fan_out);
-void layer_backward(Layer* layer, Matrix* inout, uint32_t fan_in, uint32_t fan_out);
+Layer layernorm_new(uint32_t fan_in);
+void layernorm_free(LaynormLayer* layernorm);
+void layernorm_forward (LaynormLayer* layernorm, Matrix* inout, bool train);
+void layernorm_backward(LaynormLayer* layernorm, Matrix* inout);
+void layernorm_step    (LaynormLayer* layernorm, float lr, float betta_1, float betta_2, float lambda, uint32_t t);
+
+void layer_forward (Layer* layer, Matrix* inout, bool train);
+void layer_backward(Layer* layer, Matrix* inout);
 void layer_free    (Layer* layer);
 void layer_step    (Layer* layer, float lr, float betta_1, float betta_2, float lambda, uint32_t t);
 
@@ -131,6 +149,8 @@ void mlp_train(MLP* mlp, Matrix const* input, Matrix const* desired_output);
 
 
 // --- Implementation --
+
+#define MINUS_IMPLEMENTATION
 
 #ifdef MINUS_IMPLEMENTATION
 
@@ -357,7 +377,9 @@ Layer dense_new(uint32_t fan_in, uint32_t fan_out, DenseInitOption init_option) 
     layer.data.dense = (DenseLayer){
         .weights = parameter_new(fan_out, fan_in),
         .biases  = parameter_new(fan_out, 1),
-        .cached_activation = mat_new(fan_out, 1),
+        .cached_activation = mat_new(fan_in,  1),
+        .temp_gradient     = mat_new(fan_in,  1),
+        .temp_output       = mat_new(fan_out, 1),
     };
 
     switch (init_option) {
@@ -384,29 +406,28 @@ void dense_free(DenseLayer* dense) {
     parameter_free(&dense->weights);
     parameter_free(&dense->biases);
     mat_free(&dense->cached_activation);
+    mat_free(&dense->temp_output);
+    mat_free(&dense->temp_gradient);
     *dense = (DenseLayer){0};
 }
 
-void dense_forward(DenseLayer* dense, Matrix* inout, bool train, uint32_t fan_in, uint32_t fan_out) {
+void dense_forward(DenseLayer* dense, Matrix* inout, bool train) {
     assert(dense);
     assert(inout);
 
     if (train) mat_copy_into(inout, &dense->cached_activation);
 
-    Matrix temp = mat_new(fan_out, 1);
+    mat_mul_into(&dense->weights.value, inout, &dense->temp_output, false, false, true);
+    mat_add_into(&dense->biases.value, &dense->temp_output);
 
-    mat_mul_into(&dense->weights.value, inout, &temp, false, false, true);
-    mat_add_into(&dense->biases.value, &temp);
-
-    mat_move_into(&temp, inout);
+    mat_copy_into(&dense->temp_output, inout);
 }
 
-void dense_backward(DenseLayer* dense, Matrix* inout, uint32_t fan_in, uint32_t fan_out) {
+void dense_backward(DenseLayer* dense, Matrix* inout) {
     assert(dense);
     assert(inout);
 
-    Matrix prev_grad = mat_new(fan_in, 1);
-    mat_mul_into(&dense->weights.value, inout, &prev_grad, true, false, true);
+    mat_mul_into(&dense->weights.value, inout, &dense->temp_gradient, true, false, true);
 
     mat_add_into(inout, &dense->biases.gradient);
 
@@ -418,7 +439,7 @@ void dense_backward(DenseLayer* dense, Matrix* inout, uint32_t fan_in, uint32_t 
         }
     }
 
-    mat_move_into(&prev_grad, inout);
+    mat_copy_into(&dense->temp_gradient, inout);
 }
 
 void dense_step(DenseLayer* dense, float lr, float betta_1, float betta_2, float lambda, uint32_t t) {
@@ -446,7 +467,7 @@ void activation_free(ActivationLayer* activation) {
     *activation = (ActivationLayer){0};
 }
 
-void activation_forward(ActivationLayer* activation, Matrix* inout, bool train, uint32_t fan_in, uint32_t fan_out) {
+void activation_forward(ActivationLayer* activation, Matrix* inout, bool train) {
     assert(activation);
     assert(inout);
 
@@ -456,7 +477,7 @@ void activation_forward(ActivationLayer* activation, Matrix* inout, bool train, 
         inout->values[i] = activation->forward(inout->values[i]);
 }
 
-void activation_backward(ActivationLayer* activation, Matrix* inout, uint32_t fan_in, uint32_t fan_out) {
+void activation_backward(ActivationLayer* activation, Matrix* inout) {
     assert(activation);
     assert(inout);
 
@@ -464,24 +485,120 @@ void activation_backward(ActivationLayer* activation, Matrix* inout, uint32_t fa
         inout->values[i] *= activation->derivative(activation->cached_activation.values[i]);
 }
 
-void layer_forward(Layer* layer, Matrix* inout, bool train, uint32_t fan_in, uint32_t fan_out) {
+Layer layernorm_new(uint32_t fan_in) {
+    Layer layer;
+    layer.type    = LAYER_LAYERNORM;
+    layer.fan_in  = fan_in;
+    layer.fan_out = fan_in;
+    layer.data.layernorm = (LaynormLayer){
+        .scale = parameter_new(fan_in, 1),
+        .shift = parameter_new(fan_in, 1),
+        .cached_input  = mat_new(fan_in, 1),
+        .cached_output = mat_new(fan_in, 1),
+    };
+    return layer;
+}
+
+void layernorm_free(LaynormLayer* layernorm) {
+    assert(layernorm);
+    parameter_free(&layernorm->scale);
+    parameter_free(&layernorm->shift);
+    mat_free(&layernorm->cached_input);
+    mat_free(&layernorm->cached_output);
+    *layernorm = (LaynormLayer){0};
+}
+
+static inline float meanf(float const* values, uint32_t count) {
+    assert(values);
+    
+    float mean = 0.0f;
+    for (uint32_t i = 0; i < count; ++i)
+        mean += values[i];
+    return mean / (float)count;
+}
+
+static inline float variancef(float const* values, float mean, uint32_t count) {
+    assert(values);
+    
+    float variance = 0.0f;
+    for (uint32_t i = 0; i < count; ++i)
+        variance += powf(values[i] - mean, 2.0f);
+    return variance / (float)count;
+}
+
+void layernorm_forward(LaynormLayer* layernorm, Matrix* inout, bool train) {
+    assert(layernorm);
+    assert(inout);
+    
+    const uint32_t n = mat_elem_count(inout);
+    
+    const float mean = meanf(inout->values, n);
+    const float std  = sqrtf(variancef(inout->values, mean, n) + 1e-5f);
+
+    if (train) {
+        mat_copy_into(inout, &layernorm->cached_input);
+        layernorm->cached_mean = mean;
+        layernorm->cached_std  = std;
+    }
+
+    for (uint32_t i = 0; i < n; ++i) {
+        inout->values[i] = (inout->values[i] - mean) / std;
+        if (train) layernorm->cached_output.values[i] = inout->values[i];
+        inout->values[i] = layernorm->scale.value.values[i] * inout->values[i] + layernorm->shift.value.values[i];
+    }
+}
+
+void layernorm_backward(LaynormLayer* layernorm, Matrix* inout) {
+    assert(layernorm);
+    assert(inout);
+
+    const uint32_t n = mat_elem_count(inout);
+
+    mat_add_into(inout, &layernorm->shift.gradient);
+
+    for (uint32_t i = 0; i < n; ++i) {
+        layernorm->scale.gradient.values[i] += inout->values[i] * layernorm->cached_output.values[i];
+        inout->values[i] *= layernorm->scale.value.values[i];
+    }
+
+    float sum = 0.0f;
+    float sum_normalized = 0.0f;
+
+    for (uint32_t i = 0; i < n; ++i) {
+        sum += inout->values[i];
+        sum_normalized += inout->values[i] * layernorm->cached_output.values[i];
+    }
+
+    for (uint32_t i = 0; i < n; ++i) {
+        inout->values[i] = (inout->values[i] * n - sum - layernorm->cached_output.values[i] * sum_normalized) / (n * layernorm->cached_std);
+    }
+}
+
+void layernorm_step(LaynormLayer* layernorm, float lr, float betta_1, float betta_2, float lambda, uint32_t t) {
+    parameter_step(&layernorm->scale, lr, betta_1, betta_2, lambda, t);
+    parameter_step(&layernorm->shift, lr, betta_1, betta_2, lambda, t);
+}
+
+void layer_forward(Layer* layer, Matrix* inout, bool train) {
     assert(layer);
     assert(inout);
 
     switch (layer->type) {
-        case LAYER_DENSE: dense_forward(&layer->data.dense, inout, train, fan_in, fan_out); break;
-        case LAYER_ACTIVATION: activation_forward(&layer->data.activation, inout, train, fan_in, fan_out); break;
+        case LAYER_DENSE: dense_forward(&layer->data.dense, inout, train); break;
+        case LAYER_ACTIVATION: activation_forward(&layer->data.activation, inout, train); break;
+        case LAYER_LAYERNORM: layernorm_forward(&layer->data.layernorm, inout, train); break;
         default: abort(); // unreachable
     }
 }
 
-void layer_backward(Layer* layer, Matrix* inout, uint32_t fan_in, uint32_t fan_out) {
+void layer_backward(Layer* layer, Matrix* inout) {
     assert(layer);
     assert(inout);
 
     switch (layer->type) {
-        case LAYER_DENSE: dense_backward(&layer->data.dense, inout, fan_in, fan_out); break;
-        case LAYER_ACTIVATION: activation_backward(&layer->data.activation, inout, fan_in, fan_out); break;
+        case LAYER_DENSE: dense_backward(&layer->data.dense, inout); break;
+        case LAYER_ACTIVATION: activation_backward(&layer->data.activation, inout); break;
+        case LAYER_LAYERNORM: layernorm_backward(&layer->data.layernorm, inout); break;
         default: abort(); // unreachable
     }
 }
@@ -492,6 +609,7 @@ void layer_free(Layer* layer) {
     switch (layer->type) {
         case LAYER_DENSE: dense_free(&layer->data.dense); break;
         case LAYER_ACTIVATION: activation_free(&layer->data.activation); break;
+        case LAYER_LAYERNORM: layernorm_free(&layer->data.layernorm); break;
         default: abort(); // unreachable
     }
 }
@@ -502,10 +620,10 @@ void layer_step(Layer* layer, float lr, float betta_1, float betta_2, float lamb
     switch (layer->type) {
         case LAYER_DENSE: dense_step(&layer->data.dense, lr, betta_1, betta_2, lambda, t); break;
         case LAYER_ACTIVATION: break;
+        case LAYER_LAYERNORM: layernorm_step(&layer->data.layernorm, lr, betta_1, betta_2, lambda, t); break;
         default: abort(); // unreachable
     }
 }
-
 
 MLP mlp_new(void) {
     return (MLP){
@@ -547,7 +665,7 @@ static inline void mlp_forward_helper(MLP* mlp, Matrix* inout, bool train) {
     assert(inout);
 
     for (uint32_t i = 0; i < mlp->layer_count; ++i)
-        layer_forward(&mlp->layers[i], inout, train, mlp->layers[i].fan_in, mlp->layers[i].fan_out);
+        layer_forward(&mlp->layers[i], inout, train);
 }
 
 void mlp_forward(MLP* mlp, Matrix* inout) {
@@ -559,7 +677,7 @@ static inline void mlp_backward(MLP* mlp, Matrix* inout) {
     assert(inout);
 
     for (uint32_t i = mlp->layer_count; i-- > 0;)
-        layer_backward(&mlp->layers[i], inout, mlp->layers[i].fan_in, mlp->layers[i].fan_out);
+        layer_backward(&mlp->layers[i], inout);
 }
 
 void mlp_train(MLP* mlp, Matrix const* input, Matrix const* desired_output) {

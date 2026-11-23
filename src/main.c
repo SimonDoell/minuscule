@@ -18,8 +18,14 @@ int main(void) {
 
     mlp_push_layer(&mlp, dense_new(1, 16, DENSE_INIT_KAIMING));
     mlp_push_layer(&mlp, activation_new(16, relu, relu_derivative));
-    mlp_push_layer(&mlp, dense_new(16, 16, DENSE_INIT_KAIMING));
-    mlp_push_layer(&mlp, activation_new(16, relu, relu_derivative));
+    mlp_push_layer(&mlp, layernorm_new(16));
+
+    for (uint32_t i = 0; i < 5; ++i) {
+        mlp_push_layer(&mlp, dense_new(16, 16, DENSE_INIT_KAIMING));
+        mlp_push_layer(&mlp, activation_new(16, relu, relu_derivative));
+        mlp_push_layer(&mlp, layernorm_new(16));
+    }
+
     mlp_push_layer(&mlp, dense_new(16, 1, DENSE_INIT_KAIMING));
 
     Matrix input  = mat_new(1, 1);
@@ -27,12 +33,12 @@ int main(void) {
 
     for (uint32_t i = 0; i < 1000; ++i) {
         input.values [0] = 0.5f;
-        output.values[0] = 0.3141526f;
+        output.values[0] = 0.314159265358979f;
         mlp_train(&mlp, &input, &output);
 
         mlp_forward(&mlp, &input);
 
-        printf("Value: %f\n", input.values[0]);
+        printf("Value: %.15f\n", input.values[0]);
     }
 
     mat_free(&input);
