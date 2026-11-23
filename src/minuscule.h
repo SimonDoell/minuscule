@@ -132,8 +132,6 @@ void mlp_train(MLP* mlp, Matrix const* input, Matrix const* desired_output);
 
 // --- Implementation --
 
-#define MINUS_IMPLEMENTATION
-
 #ifdef MINUS_IMPLEMENTATION
 
 #ifdef __cplusplus
@@ -574,7 +572,7 @@ void mlp_train(MLP* mlp, Matrix const* input, Matrix const* desired_output) {
 
     mlp_forward_helper(mlp, &inout, true);
 
-    mat_sub_into(desired_output, &inout);
+    mat_sub_into(desired_output, &inout); // MSE derivatives
     mat_mulf(&inout, 1.0f / (float)mlp->mini_batch);
 
     mlp_backward(mlp, &inout);
@@ -594,3 +592,17 @@ void mlp_train(MLP* mlp, Matrix const* input, Matrix const* desired_output) {
 #endif // __cplusplus
 
 #endif // MINUS_IMPLEMENTATION
+
+// ToDo:
+// - learning rate scheduling (e.g. cosine weight decay)
+// - cached matricis inside the layers to avoid re-allocation inside forward/backward
+// - softmax layer
+// - layernorm layer
+// - add the options for a differnet optimizer using tagged enums (e.g. SGD, cross-entropy, RMSProp)
+// - gradient clipping
+// - differnt loss functions
+// - dropout
+// - residual connections?
+// - different activation functions
+// - arena allocator
+// - model serialization (saving and loading to/from file)
