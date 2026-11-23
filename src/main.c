@@ -1,6 +1,6 @@
 #include <time.h>
 #include <stdio.h>
-#define MINUS_IMPLEMENTATION
+#define MINUSCULE_IMPLEMENTATION
 #include "minuscule.h"
 
 static inline float leaky_relu(float x) {
@@ -29,7 +29,7 @@ int main(void) {
     mlp.betta_2       = 0.999f,
     mlp.lambda        = 0.001f,
     mlp.mini_batch    = 4,
-    mlp.loss_function = LOSS_CATEGORICAL_CROSS_ENTROPY;
+    mlp.loss_function = LOSS_MSE;
 
     mlp_push_layer(&mlp, dense_new(1, 16, DENSE_INIT_KAIMING));
     mlp_push_layer(&mlp, layernorm_new(16));
@@ -44,7 +44,6 @@ int main(void) {
     }
 
     mlp_push_layer(&mlp, dense_new(16, 1, DENSE_INIT_KAIMING));
-    mlp_push_layer(&mlp, softmax_new(1, 1.0f));
     
 
     Matrix input  = mat_new(1, 1);

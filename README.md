@@ -8,7 +8,6 @@ _This is a work in progress_
 - dropout layer
 - add the options for a differnet optimizer using tagged enums (e.g. SGD, RMSProp)
 - gradient clipping
-- different loss functions (MSE, MAE, Cross-Entropy)
 - residual connections?
 - different activation functions
 - arena allocator

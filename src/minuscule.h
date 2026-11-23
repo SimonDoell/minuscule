@@ -4,8 +4,8 @@
 #include <assert.h>
 #include <stdbool.h>
 
-#ifndef MINUS_H
-#define MINUS_H
+#ifndef MINUSCULE_H
+#define MINUSCULE_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -169,10 +169,8 @@ void mlp_train(MLP* mlp, Matrix const* input, Matrix const* desired_output);
 
 
 // --- Implementation --
-
-#define MINUS_IMPLEMENTATION
-
-#ifdef MINUS_IMPLEMENTATION
+#ifdef MINUSCULE_IMPLEMENTATION
+#undef MINUSCULE_IMPLEMENTATION
 
 #ifdef __cplusplus
 extern "C" {
