@@ -56,6 +56,7 @@ typedef enum {
     LAYER_DENSE,
     LAYER_ACTIVATION,
     LAYER_LAYERNORM,
+    LAYER_SOFTMAX,
 } LayerType;
 
 typedef struct {
@@ -83,14 +84,20 @@ typedef struct {
 } LaynormLayer;
 
 typedef struct {
+    float temp;
+    Matrix cached_activation;
+} SoftmaxLayer;
+
+typedef struct {
     LayerType type;
     uint32_t fan_in;
     uint32_t fan_out;
 
     union {
-        DenseLayer dense;
-        ActivationLayer activation;
-        LaynormLayer layernorm;
+        DenseLayer       dense;
+        ActivationLayer  activation;
+        LaynormLayer     layernorm;
+        SoftmaxLayer     softmax;
     } data;
 } Layer;
 
@@ -127,6 +134,11 @@ void layernorm_free(LaynormLayer* layernorm);
 void layernorm_forward (LaynormLayer* layernorm, Matrix* inout, bool train);
 void layernorm_backward(LaynormLayer* layernorm, Matrix* inout);
 void layernorm_step    (LaynormLayer* layernorm, float lr, float betta_1, float betta_2, float lambda, uint32_t t);
+
+Layer softmax_new(uint32_t fan_in, float temp);
+void softmax_free(SoftmaxLayer* softmax);
+void softmax_forward (SoftmaxLayer* softmax, Matrix* inout, bool train);
+void softmax_backward(SoftmaxLayer* softmax, Matrix* inout);
 
 void layer_forward (Layer* layer, Matrix* inout, bool train);
 void layer_backward(Layer* layer, Matrix* inout);
@@ -508,13 +520,19 @@ void layernorm_free(LaynormLayer* layernorm) {
     *layernorm = (LaynormLayer){0};
 }
 
+static inline float sumf(float const* values, uint32_t count) {
+    assert(values);
+    
+    float sum = 0.0f;
+    for (uint32_t i = 0; i < count; ++i)
+        sum += values[i];
+    return sum;
+}
+
 static inline float meanf(float const* values, uint32_t count) {
     assert(values);
     
-    float mean = 0.0f;
-    for (uint32_t i = 0; i < count; ++i)
-        mean += values[i];
-    return mean / (float)count;
+    return sumf(values, count) / (float)count;
 }
 
 static inline float variancef(float const* values, float mean, uint32_t count) {
@@ -579,6 +597,67 @@ void layernorm_step(LaynormLayer* layernorm, float lr, float betta_1, float bett
     parameter_step(&layernorm->shift, lr, betta_1, betta_2, lambda, t);
 }
 
+Layer softmax_new(uint32_t fan_in, float temp) {
+    assert(temp > 0.0f);
+    Layer layer;
+    layer.type    = LAYER_SOFTMAX;
+    layer.fan_in  = fan_in;
+    layer.fan_out = fan_in;
+    layer.data.softmax = (SoftmaxLayer){
+        .temp = temp,
+        .cached_activation = mat_new(fan_in, 1),
+    };
+    return layer;
+}
+
+void softmax_free(SoftmaxLayer* softmax) {
+    assert(softmax);
+    mat_free(&softmax->cached_activation);
+    *softmax = (SoftmaxLayer){0};
+}
+
+void softmax_forward(SoftmaxLayer* softmax, Matrix* inout, bool train) {
+    assert(softmax);
+    assert(inout);
+    assert(inout->rows >= 1);
+
+    const uint32_t n = mat_elem_count(inout);
+
+    if (train) mat_copy_into(inout, &softmax->cached_activation);
+
+    float max = inout->values[0];
+
+    for (uint32_t i = 1; i < n; ++i)
+        if (max < inout->values[i])
+            max = inout->values[i];
+
+    float exps[n];
+
+    for (uint32_t i = 0; i < n; ++i)
+        exps[i] = expf((inout->values[i] - max) / softmax->temp);
+
+    float sum = sumf(exps, n);
+
+    for (uint32_t i = 0; i < n; ++i)
+        inout->values[i] = exps[i] / sum;
+}
+
+void softmax_backward(SoftmaxLayer* softmax, Matrix* inout) {
+    assert(softmax);
+    assert(inout);
+    assert(softmax->cached_activation.rows == inout->rows);
+
+    const uint32_t n = mat_elem_count(inout);
+
+    float dot = 0.0f;
+
+    for (uint32_t i = 0; i < n; ++i)
+        dot += inout->values[i] * softmax->cached_activation.values[i];
+
+    for (uint32_t i = 0; i < n; ++i)
+        inout->values[i] = softmax->cached_activation.values[i] * (inout->values[i] - dot) / softmax->temp;
+}
+
 void layer_forward(Layer* layer, Matrix* inout, bool train) {
     assert(layer);
     assert(inout);
@@ -587,6 +666,7 @@ void layer_forward(Layer* layer, Matrix* inout, bool train) {
         case LAYER_DENSE: dense_forward(&layer->data.dense, inout, train); break;
         case LAYER_ACTIVATION: activation_forward(&layer->data.activation, inout, train); break;
         case LAYER_LAYERNORM: layernorm_forward(&layer->data.layernorm, inout, train); break;
+        case LAYER_SOFTMAX: softmax_forward(&layer->data.softmax, inout, train); break;
         default: abort(); // unreachable
     }
 }
@@ -599,6 +679,7 @@ void layer_backward(Layer* layer, Matrix* inout) {
         case LAYER_DENSE: dense_backward(&layer->data.dense, inout); break;
         case LAYER_ACTIVATION: activation_backward(&layer->data.activation, inout); break;
         case LAYER_LAYERNORM: layernorm_backward(&layer->data.layernorm, inout); break;
+        case LAYER_SOFTMAX: softmax_backward(&layer->data.softmax, inout); break;
         default: abort(); // unreachable
     }
 }
@@ -610,6 +691,7 @@ void layer_free(Layer* layer) {
         case LAYER_DENSE: dense_free(&layer->data.dense); break;
         case LAYER_ACTIVATION: activation_free(&layer->data.activation); break;
         case LAYER_LAYERNORM: layernorm_free(&layer->data.layernorm); break;
+        case LAYER_SOFTMAX: softmax_free(&layer->data.softmax); break;
         default: abort(); // unreachable
     }
 }
@@ -621,6 +703,7 @@ void layer_step(Layer* layer, float lr, float betta_1, float betta_2, float lamb
         case LAYER_DENSE: dense_step(&layer->data.dense, lr, betta_1, betta_2, lambda, t); break;
         case LAYER_ACTIVATION: break;
         case LAYER_LAYERNORM: layernorm_step(&layer->data.layernorm, lr, betta_1, betta_2, lambda, t); break;
+        case LAYER_SOFTMAX: break;
         default: abort(); // unreachable
     }
 }
