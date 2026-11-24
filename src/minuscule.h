@@ -182,6 +182,13 @@ void layer_backward(Layer* layer, Matrix* inout);
 void layer_free    (Layer* layer);
 void layer_step    (Layer* layer, float lr, float betta_1, float betta_2, float lambda, uint32_t t);
 
+float relu(float x);
+float relu_derivative(float x);
+float leaky_relu(float x);
+float leaky_relu_derivative(float x);
+float sigmoid(float x);
+float sigmoid_derivative(float x);
+
 MLP mlp_new(void);
 void mlp_free(MLP* mlp);
 
@@ -800,6 +807,23 @@ MLP mlp_new(void) {
         .layer_count = 0,
         .layers = NULL,
     };
+}
+
+float leaky_relu(float x) {
+    return (x > 0 ? x : 0.1f * x);
+}
+
+float leaky_relu_derivative(float x) {
+    return (x > 0 ? 1 : 0.1f);
+}
+
+float sigmoid(float x) {
+    return 1.0f / (1.0f + expf(x));
+}
+
+float sigmoid_derivative(float x) {
+    float s = sigmoid(x);
+    return s * (1 - s);
 }
 
 void mlp_free(MLP* mlp) {

@@ -3,23 +3,6 @@
 #define MINUSCULE_IMPLEMENTATION
 #include "minuscule.h"
 
-static inline float leaky_relu(float x) {
-    return (x > 0 ? x : 0.1f * x);
-}
-
-static inline float leaky_relu_derivative(float x) {
-    return (x > 0 ? 1 : 0.1f);
-}
-
-static inline float sigmoid(float x) {
-    return 1.0f / (1.0f + expf(x));
-}
-
-static inline float sigmoid_derivative(float x) {
-    float s = sigmoid(x);
-    return s * (1 - s);
-}
-
 int main(void) {
     srand((unsigned int)time(0));
     
@@ -44,7 +27,6 @@ int main(void) {
     }
 
     mlp_push_layer(&mlp, dense_new(16, 1, DENSE_INIT_KAIMING));
-    
 
     Matrix input  = mat_new(1, 1);
     Matrix output = mat_new(1, 1);
