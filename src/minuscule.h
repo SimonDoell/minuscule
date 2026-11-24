@@ -320,6 +320,9 @@ static inline void mat_mul_into_nn(Matrix const* a, Matrix const* b, Matrix* out
 }
 
 static inline void mat_mul_into_nt(Matrix const* a, Matrix const* b, Matrix* out) {
+    (void)a;
+    (void)b;
+    (void)out;
     abort();
 }
 
@@ -336,6 +339,9 @@ static inline void mat_mul_into_tn(Matrix const* a, Matrix const* b, Matrix* out
 }
 
 static inline void mat_mul_into_tt(Matrix const* a, Matrix const* b, Matrix* out) {
+    (void)a;
+    (void)b;
+    (void)out;
     abort();
 }
 
@@ -355,7 +361,7 @@ void mat_mul_into(Matrix const* a, Matrix const* b, Matrix* out, bool transpose_
 
     if (zero) mat_zero(out);
 
-    uint8_t flags = (uint8_t)(transpose_a << 1) | (transpose_b << 0);
+    uint8_t flags = (uint8_t)((transpose_a << 1) | (transpose_b << 0));
 
     switch (flags) {
         case (0 << 1) | (0 << 0): mat_mul_into_nn(a, b, out); break;
