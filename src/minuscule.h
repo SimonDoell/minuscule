@@ -119,7 +119,9 @@ typedef struct {
 
 typedef struct {
     float lr_begin;
-    float decay;
+    float lr_end;
+    float exponent;
+    uint32_t expected_steps;
 } ExponentialLearningRate;
 
 typedef struct {
@@ -131,7 +133,7 @@ typedef struct {
 } LearningRate;
 
 LearningRate constant_learning_rate(float lr);
-LearningRate exponential_learning_rate(float lr_begin, float decay);
+LearningRate exponential_learning_rate(float lr_begin, float lr_end, float exponent, uint32_t expected_steps);
 
 float get_learning_rate(LearningRate learning_rate, uint32_t step);
 
@@ -209,7 +211,7 @@ Matrix mat_new(uint32_t rows, uint32_t cols) {
     return (Matrix){
         .rows = rows,
         .cols = cols,
-        .values = calloc(rows * cols, sizeof(float)),
+        .values = (float*)calloc(rows * cols, sizeof(float)),
     };
 }
 
@@ -353,7 +355,7 @@ void mat_mul_into(Matrix const* a, Matrix const* b, Matrix* out, bool transpose_
 
     if (zero) mat_zero(out);
 
-    uint8_t flags = (transpose_a << 1) | (transpose_b << 0);
+    uint8_t flags = (uint8_t)(transpose_a << 1) | (transpose_b << 0);
 
     switch (flags) {
         case (0 << 1) | (0 << 0): mat_mul_into_nn(a, b, out); break;
@@ -390,8 +392,8 @@ void parameter_step(Parameter* parameter, float lr, float betta_1, float betta_2
     assert(mat_same_shape(&parameter->value, &parameter->optimizer.momentum));
     assert(mat_same_shape(&parameter->value, &parameter->optimizer.variance));
 
-    const float betta_1_t = 1.0 - powf(betta_1, t);
-    const float betta_2_t = 1.0 - powf(betta_2, t);
+    const float betta_1_t = 1.0f - powf(betta_1, (float)t);
+    const float betta_2_t = 1.0f - powf(betta_2, (float)t);
 
     const uint32_t n = mat_elem_count(&parameter->value);
 
@@ -401,8 +403,8 @@ void parameter_step(Parameter* parameter, float lr, float betta_1, float betta_2
     float* const v = parameter->optimizer.variance.values;
     
     for (uint32_t i = 0; i < n; ++i) {
-        m[i] = betta_1 * m[i] + (1.0 - betta_1) * g[i];
-        v[i] = betta_2 * v[i] + (1.0 - betta_2) * g[i] * g[i];
+        m[i] = betta_1 * m[i] + (1.0f - betta_1) * g[i];
+        v[i] = betta_2 * v[i] + (1.0f - betta_2) * g[i] * g[i];
 
         float m_hat = m[i] / betta_1_t;
         float v_hat = v[i] / betta_2_t;
@@ -428,13 +430,13 @@ Layer dense_new(uint32_t fan_in, uint32_t fan_out, DenseInitOption init_option) 
 
     switch (init_option) {
         case DENSE_INIT_XAVIER:  {
-            float range = sqrtf(6.0 / (fan_in + fan_out));
+            float range = sqrtf(6.0f / (float)(fan_in + fan_out));
             for (uint32_t i = 0; i < mat_elem_count(&layer.data.dense.weights.value); ++i)
                 layer.data.dense.weights.value.values[i] = ((float)rand() / (float)RAND_MAX * 2.0f - 1.0f) * range;
             break;
         }
         case DENSE_INIT_KAIMING: {
-            float range = sqrtf(2.0 / fan_in);
+            float range = sqrtf(2.0f / (float)fan_in);
             for (uint32_t i = 0; i < mat_elem_count(&layer.data.dense.weights.value); ++i)
                 layer.data.dense.weights.value.values[i] = ((float)rand() / (float)RAND_MAX) * range;
             break;
@@ -623,7 +625,7 @@ void layernorm_backward(LaynormLayer* layernorm, Matrix* inout) {
     }
 
     for (uint32_t i = 0; i < n; ++i) {
-        inout->values[i] = (inout->values[i] * n - sum - layernorm->cached_output.values[i] * sum_normalized) / (n * layernorm->cached_std);
+        inout->values[i] = (inout->values[i] * (float)n - sum - layernorm->cached_output.values[i] * sum_normalized) / ((float)n * layernorm->cached_std);
     }
 }
 
@@ -752,12 +754,14 @@ LearningRate constant_learning_rate(float lr) {
     };
 }
 
-LearningRate exponential_learning_rate(float lr_begin, float decay) {
+LearningRate exponential_learning_rate(float lr_begin, float lr_end, float exponent, uint32_t expected_steps) {
     return (LearningRate){
         .type = LEARNING_RATE_EXPONENTIAL,
         .data.exponential = (ExponentialLearningRate){
-            .lr_begin = lr_begin,
-            .decay    = decay,
+            .lr_begin       = lr_begin,
+            .lr_end         = lr_end,
+            .exponent       = exponent,
+            .expected_steps = expected_steps,
         },
     };
 }
@@ -765,7 +769,13 @@ LearningRate exponential_learning_rate(float lr_begin, float decay) {
 float get_learning_rate(LearningRate learning_rate, uint32_t step) {
     switch (learning_rate.type) {
         case LEARNING_RATE_CONSTANT: return learning_rate.data.constant.learning_rate;
-        case LEARNING_RATE_EXPONENTIAL: return learning_rate.data.exponential.lr_begin * powf(learning_rate.data.exponential.decay, step);
+        case LEARNING_RATE_EXPONENTIAL: {
+            float t = (float)step / (float)learning_rate.data.exponential.expected_steps;
+            if (t > 1.0f) t = 1.0f;
+            return learning_rate.data.exponential.lr_end
+                + (learning_rate.data.exponential.lr_begin - learning_rate.data.exponential.lr_end)
+                * powf(1.0f - t, learning_rate.data.exponential.exponent);
+        }
         default: abort();  // unreachable
     }
 }
@@ -801,7 +811,7 @@ void mlp_push_layer(MLP* mlp, Layer layer) {
 
     uint32_t n = mlp->layer_count;
 
-    mlp->layers = realloc(mlp->layers, ++mlp->layer_count * sizeof(Layer));
+    mlp->layers = (Layer*)realloc(mlp->layers, ++mlp->layer_count * sizeof(Layer));
 
     mlp->layers[n] = layer;
 }

@@ -21,14 +21,14 @@ static inline float sigmoid_derivative(float x) {
 }
 
 int main(void) {
-    srand(time(0));
+    srand((unsigned int)time(0));
     
     MLP mlp = mlp_new();
-    mlp.learning_rate = exponential_learning_rate(0.015f, 0.999995f),
+    mlp.learning_rate = exponential_learning_rate(0.010f, 0.0005f, 1.0f, 10000),
     mlp.betta_1       = 0.9f,
     mlp.betta_2       = 0.999f,
     mlp.lambda        = 0.001f,
-    mlp.mini_batch    = 32,
+    mlp.mini_batch    = 16,
     mlp.loss_function = LOSS_MSE;
 
     mlp_push_layer(&mlp, dense_new(1, 16, DENSE_INIT_KAIMING));
@@ -49,17 +49,15 @@ int main(void) {
     Matrix input  = mat_new(1, 1);
     Matrix output = mat_new(1, 1);
 
-    for (uint32_t i = 0; i < 100000; ++i) {
+    for (uint32_t i = 0; i < 10000; ++i) {
         input.values [0] = 0.5f;
         output.values[0] = 0.314159265358979f;
         mlp_train(&mlp, &input, &output);
 
         mlp_forward(&mlp, &input);
 
-        printf("Value: %.15f\n", input.values[0]);
+        printf("Value: %f\n", (double)input.values[0]);
     }
-
-    printf("Final lr: %f\n", get_learning_rate(mlp.learning_rate, mlp.optimizer_step));
 
     mat_free(&input);
     mat_free(&output);
