@@ -38,7 +38,7 @@ else
 endif
 	
 CFLAGS  = $(COMMON_FLAGS) $(OPT_FLAGS) $(SAN_FLAGS)
-LDFLAGS = $(SAN_FLAGS)
+LDFLAGS = -flto $(SAN_FLAGS)
 LDLIBS  = -lm
 
 .PHONY: all clean run

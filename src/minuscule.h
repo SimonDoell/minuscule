@@ -189,6 +189,14 @@ float leaky_relu_derivative(float x);
 float sigmoid(float x);
 float sigmoid_derivative(float x);
 float tanh_derivative(float x);
+float elu(float x);
+float elu_derivative(float x);
+float gelu(float x);
+float gelu_derivative(float x);
+float softsign(float x);
+float softsign_derivative(float x);
+float softplus(float x);
+float softplus_derivative(float x);
 
 MLP mlp_new(void);
 void mlp_free(MLP* mlp);
@@ -811,11 +819,11 @@ MLP mlp_new(void) {
 }
 
 float leaky_relu(float x) {
-    return (x > 0 ? x : 0.1f * x);
+    return (x > 0.0f ? x : 0.1f * x);
 }
 
 float leaky_relu_derivative(float x) {
-    return (x > 0 ? 1 : 0.1f);
+    return (x > 0.0f ? 1 : 0.1f);
 }
 
 float sigmoid(float x) {
@@ -824,12 +832,46 @@ float sigmoid(float x) {
 
 float sigmoid_derivative(float x) {
     float s = sigmoid(x);
-    return s * (1 - s);
+    return s * (1.0f - s);
 }
 
 float tanh_derivative(float x) {
     float t = tanhf(x);
     return 1.0f - t * t;
+}
+
+float elu(float x) {
+    return (x >= 0.0f ? x : (expf(x) - 1));
+}
+
+float elu_derivative(float x) {
+    return (x >= 0.0f ? x : expf(x));
+}
+
+float gelu(float x) {
+    return x * sigmoid(1.702f * x); // GELU approximation using sigmoid
+}
+
+float gelu_derivative(float x) {
+    float x_hat = 1.702f * x;
+    float s = sigmoid(x_hat);
+    return s + x_hat * s * (1.0f - s);
+}
+
+float softsign(float x) {
+    return x / (1.0f + fabsf(x));
+}
+
+float softsign_derivative(float x) {
+    return 1.0f / powf((1 + fabsf(x)), 2);
+}
+
+float softplus(float x) {
+    return logf(1.0f + expf(x));
+}
+
+float softplus_derivative(float x) {
+    return 1.0f / (1.0f + expf(-x));
 }
 
 void mlp_free(MLP* mlp) {
