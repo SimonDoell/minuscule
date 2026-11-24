@@ -7,6 +7,14 @@
 #ifndef MINUSCULE_H
 #define MINUSCULE_H
 
+#if defined(__GNUC__) || defined(__clang__)
+#define unreachable() __builtin_unreachable()
+#elif defined(_MSVC_VER)
+#define unreachable() __assume(0)
+#else
+#define unreachable() ((void)0)
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -463,7 +471,6 @@ Layer dense_new(uint32_t fan_in, uint32_t fan_out, DenseInitOption init_option) 
                 layer.data.dense.weights.value.values[i] = ((float)rand() / (float)RAND_MAX) * range;
             break;
         }
-        default: abort(); // unreachable
     }
 
     return layer;
@@ -726,7 +733,6 @@ void layer_forward(Layer* layer, Matrix* inout, bool train) {
         case LAYER_ACTIVATION: activation_forward(&layer->data.activation, inout, train); break;
         case LAYER_LAYERNORM: layernorm_forward(&layer->data.layernorm, inout, train); break;
         case LAYER_SOFTMAX: softmax_forward(&layer->data.softmax, inout, train); break;
-        default: abort(); // unreachable
     }
 }
 
@@ -739,7 +745,6 @@ void layer_backward(Layer* layer, Matrix* inout) {
         case LAYER_ACTIVATION: activation_backward(&layer->data.activation, inout); break;
         case LAYER_LAYERNORM: layernorm_backward(&layer->data.layernorm, inout); break;
         case LAYER_SOFTMAX: softmax_backward(&layer->data.softmax, inout); break;
-        default: abort(); // unreachable
     }
 }
 
@@ -751,7 +756,6 @@ void layer_free(Layer* layer) {
         case LAYER_ACTIVATION: activation_free(&layer->data.activation); break;
         case LAYER_LAYERNORM: layernorm_free(&layer->data.layernorm); break;
         case LAYER_SOFTMAX: softmax_free(&layer->data.softmax); break;
-        default: abort(); // unreachable
     }
 }
 
@@ -763,7 +767,6 @@ void layer_step(Layer* layer, float lr, float betta_1, float betta_2, float lamb
         case LAYER_ACTIVATION: break;
         case LAYER_LAYERNORM: layernorm_step(&layer->data.layernorm, lr, betta_1, betta_2, lambda, t); break;
         case LAYER_SOFTMAX: break;
-        default: abort(); // unreachable
     }
 }
 
@@ -798,7 +801,9 @@ float get_learning_rate(LearningRate learning_rate, uint32_t step) {
                 + (learning_rate.data.exponential.lr_begin - learning_rate.data.exponential.lr_end)
                 * powf(1.0f - t, learning_rate.data.exponential.exponent);
         }
-        default: abort();  // unreachable
+        default: {
+            unreachable();
+        }
     }
 }
 
