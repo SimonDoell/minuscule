@@ -188,6 +188,7 @@ float leaky_relu(float x);
 float leaky_relu_derivative(float x);
 float sigmoid(float x);
 float sigmoid_derivative(float x);
+float tanh_derivative(float x);
 
 MLP mlp_new(void);
 void mlp_free(MLP* mlp);
@@ -824,6 +825,11 @@ float sigmoid(float x) {
 float sigmoid_derivative(float x) {
     float s = sigmoid(x);
     return s * (1 - s);
+}
+
+float tanh_derivative(float x) {
+    float t = tanhf(x);
+    return 1.0f - t * t;
 }
 
 void mlp_free(MLP* mlp) {
