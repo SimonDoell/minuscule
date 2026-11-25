@@ -7,105 +7,103 @@
 #ifndef MINUSCULE_H
 #define MINUSCULE_H
 
-#if defined(__GNUC__) || defined(__clang__)
-#define unreachable() __builtin_unreachable()
-#elif defined(_MSVC_VER)
-#define unreachable() __assume(0)
-#else
-#define unreachable() ((void)0)
-#endif
+#define MAX_INCOMING 2
+#define MAX_OUTGOING 2
 
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
 
 typedef struct {
+    float* values;
     uint32_t rows;
     uint32_t cols;
-    float* values;
 } Matrix;
 
-Matrix mat_new(uint32_t rows, uint32_t cols);
-void mat_free(Matrix* m);
-uint32_t mat_elem_count(Matrix const* m);
+typedef enum {
+    OPTIMIZER_SGD,
+    OPTIMIZER_ADAMW,
+} OptimizerType;
 
-void mat_ensure_shape(Matrix* m, uint32_t rows, uint32_t cols);
-bool mat_same_shape(Matrix const* a, Matrix const* b);
-void mat_zero(Matrix* m);
+typedef struct {
+    float betta_1;
+    float betta_2;
+    float lambda;
+} AdamWConfig;
 
-float mat_at_const(Matrix const* m, uint32_t row, uint32_t col);
-float* mat_at(Matrix* m, uint32_t row, uint32_t col);
-
-void mat_add_into(Matrix const* a, Matrix* b);
-void mat_sub_into(Matrix const* a, Matrix* b);
-void mat_mulf(Matrix* m, float v);
-
-void mat_copy_into(Matrix const* src, Matrix* dest);
-void mat_move_into(Matrix* src, Matrix* dest);
-
-void mat_mul_into(Matrix const* a, Matrix const* b, Matrix* out, bool transpose_a, bool transpose_b, bool zero);
+typedef struct {
+    OptimizerType type;
+    union {
+        AdamWConfig adamw;
+    } data;
+} OptimizerConfig;
 
 typedef struct {
     Matrix momentum;
     Matrix variance;
+    AdamWConfig config;
 } AdamW;
+
+typedef struct {
+    OptimizerType type;
+
+    union {
+        AdamW adamw;
+    } data;
+} Optimizer;
 
 typedef struct {
     Matrix value;
     Matrix gradient;
-    AdamW optimizer;
+    Optimizer optimizer;
 } Parameter;
-
-Parameter parameter_new(uint32_t rows, uint32_t cols);
-void parameter_free(Parameter* parameter);
-void parameter_step(Parameter* parameter, float lr, float betta_1, float betta_2, float lambda, uint32_t t);
 
 typedef enum {
     LAYER_DENSE,
     LAYER_ACTIVATION,
-    LAYER_LAYERNORM,
+    LAYER_RMSNORM,
     LAYER_SOFTMAX,
 } LayerType;
 
 typedef struct {
     Parameter weights;
     Parameter biases;
-    Matrix cached_activation;
+    Matrix cached_input;
     Matrix temp_output;
     Matrix temp_gradient;
 } DenseLayer;
 
-typedef float(*Function)(float x);
+typedef float(*Function)(float);
 
 typedef struct {
     Function forward;
-    Function derivative;
-    Matrix cached_activation;
-} ActivationLayer;
+    Function backward;
+    Matrix cached_input;
+} Activationlayer;
 
 typedef struct {
     Parameter scale;
-    Parameter shift;
     Matrix cached_input;
-    Matrix cached_output;
-    float cached_mean, cached_std;
-} LaynormLayer;
+} RMSNormLayer;
 
 typedef struct {
-    float temp;
+    float temperatur;
     Matrix cached_output;
 } SoftmaxLayer;
 
 typedef struct {
     LayerType type;
-    uint32_t fan_in;
-    uint32_t fan_out;
+    uint32_t fan_in, fan_out;
+    Matrix input, output;
+    Matrix gradient_input, gradient_output;
+    uint32_t outgoing[MAX_OUTGOING];
+    uint32_t incoming[MAX_INCOMING];
 
     union {
-        DenseLayer       dense;
-        ActivationLayer  activation;
-        LaynormLayer     layernorm;
-        SoftmaxLayer     softmax;
+        DenseLayer      dense;
+        Activationlayer activation;
+        RMSNormLayer    rmsnorm;
+        SoftmaxLayer    softmax;
     } data;
 } Layer;
 
@@ -113,7 +111,7 @@ typedef enum {
     LOSS_MSE,
     LOSS_MAE,
     LOSS_BINARY_CROSS_ENTROPY,
-    LOSS_CATEGORICAL_CROSS_ENTROPY, // can only be used with > 1 output features
+    LOSS_CATEGORICAL_CROSS_ENTROPY, // can only be used with > 1 output feature(s)
 } LossFunction;
 
 typedef enum {
@@ -134,242 +132,155 @@ typedef struct {
 
 typedef struct {
     LearningRateType type;
+
     union {
-        ConstantLearningRate     constant;
-        ExponentialLearningRate  exponential;
+        ConstantLearningRate constant;
+        ExponentialLearningRate exponential;
     } data;
 } LearningRate;
-
-LearningRate constant_learning_rate(float lr);
-LearningRate exponential_learning_rate(float lr_begin, float lr_end, float exponent, uint32_t expected_steps);
-
-float get_learning_rate(LearningRate learning_rate, uint32_t step);
 
 typedef struct {
     LearningRate learning_rate;
     LossFunction loss_function;
-    float betta_1;
-    float betta_2;
-    float lambda;
-    uint32_t mini_batch;
-    uint32_t t, optimizer_step;
-
-    uint32_t layer_count;
     Layer* layers;
+    
+    uint32_t mini_batch;
+    uint32_t layer_count;
 } MLP;
 
-typedef enum {
-    DENSE_INIT_XAVIER,
-    DENSE_INIT_KAIMING,
-} DenseInitOption;
-
-Layer dense_new(uint32_t fan_in, uint32_t fan_out, DenseInitOption init_option);
-void dense_free(DenseLayer* dense);
-void dense_forward (DenseLayer* dense, Matrix* inout, bool train);
-void dense_backward(DenseLayer* dense, Matrix* inout);
-void dense_step    (DenseLayer* dense, float lr, float betta_1, float betta_2, float lambda, uint32_t t);
-
-Layer activation_new(uint32_t fan_in, Function forward, Function derivative);
-void activation_free(ActivationLayer* activation);
-void activation_forward (ActivationLayer* activation, Matrix* inout, bool train);
-void activation_backward(ActivationLayer* activation, Matrix* inout);
-
-Layer layernorm_new(uint32_t fan_in);
-void layernorm_free(LaynormLayer* layernorm);
-void layernorm_forward (LaynormLayer* layernorm, Matrix* inout, bool train);
-void layernorm_backward(LaynormLayer* layernorm, Matrix* inout);
-void layernorm_step    (LaynormLayer* layernorm, float lr, float betta_1, float betta_2, float lambda, uint32_t t);
-
-Layer softmax_new(uint32_t fan_in, float temp);
-void softmax_free(SoftmaxLayer* softmax);
-void softmax_forward (SoftmaxLayer* softmax, Matrix* inout, bool train);
-void softmax_backward(SoftmaxLayer* softmax, Matrix* inout);
-
-void layer_forward (Layer* layer, Matrix* inout, bool train);
-void layer_backward(Layer* layer, Matrix* inout);
-void layer_free    (Layer* layer);
-void layer_step    (Layer* layer, float lr, float betta_1, float betta_2, float lambda, uint32_t t);
-
-float relu(float x);
-float relu_derivative(float x);
-float leaky_relu(float x);
-float leaky_relu_derivative(float x);
-float sigmoid(float x);
-float sigmoid_derivative(float x);
-float tanh_derivative(float x);
-float elu(float x);
-float elu_derivative(float x);
-float gelu(float x);
-float gelu_derivative(float x);
-float softsign(float x);
-float softsign_derivative(float x);
-float softplus(float x);
-float softplus_derivative(float x);
-
-MLP mlp_new(void);
-void mlp_free(MLP* mlp);
-
-void mlp_push_layer(MLP* mlp, Layer layer);
-
-void mlp_forward(MLP* mlp, Matrix* inout);
-void mlp_train(MLP* mlp, Matrix const* input, Matrix const* desired_output);
-
-#ifdef __cplusplus
-}
-#endif // __cplusplus
-
-#endif // MINUSCULE_H
-
-// --- Implementation --
-#ifdef MINUSCULE_IMPLEMENTATION
-#undef MINUSCULE_IMPLEMENTATION
-
-#ifdef __cplusplus
-extern "C" {
-#endif // __cplusplus
-
-Matrix mat_new(uint32_t rows, uint32_t cols) {
-    assert(rows > 0);
-    assert(cols > 0);
+static inline Matrix mat_new(uint32_t rows, uint32_t cols) {
+    assert((rows * cols) > 0);
 
     return (Matrix){
-        .rows = rows,
-        .cols = cols,
-        .values = (float*)calloc(rows * cols, sizeof(float)),
+        .values = calloc(rows * cols, sizeof(float)),
+        .rows   = rows,
+        .cols   = cols,
     };
 }
 
-void mat_free(Matrix* m) {
+static inline void mat_free(Matrix* m) {
     assert(m);
-    assert(m->values);
     free(m->values);
     *m = (Matrix){0};
 }
 
-uint32_t mat_elem_count(Matrix const* m) {
+static inline void mat_ensure_shape(Matrix* m, uint32_t rows, uint32_t cols) {
+    assert(m);
+    if (m->rows == rows && m->cols == cols) return;
+    mat_free(m);
+    *m = mat_new(rows, cols);
+}
+
+static inline uint32_t _mat_index(uint32_t row, uint32_t col, uint32_t rows) {
+    return row + col * rows;
+}
+
+static inline float* mat_at(Matrix* m, uint32_t row, uint32_t col) {
+    assert(m);
+    assert(row < m->rows);
+    assert(col < m->cols);
+    return &m->values[_mat_index(row, col, m->rows)];
+}
+
+static inline float mat_at_const(Matrix const* m, uint32_t row, uint32_t col) {
+    assert(m);
+    assert(row < m->rows);
+    assert(col < m->cols);
+    return m->values[_mat_index(row, col, m->rows)];
+}
+
+static inline void mat_move_into(Matrix* src, Matrix* dest) {
+    assert(src);
+    assert(dest);
+    *dest = *src;
+    *src  = (Matrix){0};
+}
+
+static inline uint32_t mat_element(Matrix const* m) {
     assert(m);
     return m->rows * m->cols;
 }
 
-void mat_ensure_shape(Matrix* m, uint32_t rows, uint32_t cols) {
-    assert(m);
-
-    if (m->rows == rows && m->cols == cols) return;
-
-    if (m->values) mat_free(m);
-    *m = mat_new(rows, cols);
-}
-
-bool mat_same_shape(Matrix const* a, Matrix const* b) {
-    assert(a);
-    assert(b);
-    return (a->rows == b->rows && a->cols == b->cols);
-}
-
-void mat_zero(Matrix* m) {
-    assert(m);
-    for (uint32_t i = 0; i < mat_elem_count(m); ++i)
-        m->values[i] = 0;
-}
-
-static inline uint32_t mat_index(uint32_t row, uint32_t col, uint32_t rows) {
-    return row + col * rows;
-}
-
-float mat_at_const(Matrix const* m, uint32_t row, uint32_t col) {
-    assert(m);
-    assert(row < m->rows);
-    assert(col < m->cols);
-    return m->values[mat_index(row, col, m->rows)];
-}
-
-float* mat_at(Matrix* m, uint32_t row, uint32_t col) {
-    assert(m);
-    assert(row < m->rows);
-    assert(col < m->cols);
-    return &m->values[mat_index(row, col, m->rows)];
-}
-
-void mat_add_into(Matrix const* a, Matrix* b) {
-    assert(a);
-    assert(b);
-    assert(mat_same_shape(a, b));
-
-    for (uint32_t i = 0; i < mat_elem_count(a); ++i)
-        b->values[i] += a->values[i];
-}
-
-void mat_sub_into(Matrix const* a, Matrix* b) {
-    assert(a);
-    assert(b);
-    assert(mat_same_shape(a, b));
-
-    for (uint32_t i = 0; i < mat_elem_count(a); ++i)
-        b->values[i] -= a->values[i];
-}
-
-void mat_mulf(Matrix* m, float v) {
-    assert(m);
-
-    for (uint32_t i = 0; i < mat_elem_count(m); ++i)
-        m->values[i] *= v;
-}
-
-void mat_copy_into(Matrix const* src, Matrix* dest) {
+static inline void mat_copy_into(Matrix const* src, Matrix* dest) {
     assert(src);
     assert(dest);
-
     mat_ensure_shape(dest, src->rows, src->cols);
 
-    for (uint32_t i = 0; i < mat_elem_count(src); ++i)
+    for (uint32_t i = 0; i < mat_element(src); ++i)
         dest->values[i] = src->values[i];
 }
 
-void mat_move_into(Matrix* src, Matrix* dest) {
-    mat_free(dest);
-    *dest = *src;
-    *src = (Matrix){0};
+static inline Matrix mat_copy(Matrix const* src) {
+    assert(src);
+    Matrix result = mat_new(src->rows, src->cols);
+
+    for (uint32_t i = 0; i < mat_element(src); ++i)
+        result.values[i] = src->values[i];
+
+    return result;
 }
 
-static inline void mat_mul_into_nn(Matrix const* a, Matrix const* b, Matrix* out) {
-    for (uint32_t i = 0; i < a->rows; ++i) {
-        for (uint32_t k = 0; k < b->cols; ++k) {
-            for (uint32_t j = 0; j < a->cols; ++j) {
+static inline bool mat_same_shape(Matrix const* a, Matrix const* b) {
+    return a->rows == b->rows && a->cols == b->cols;
+}
+
+static inline void mat_add_into(Matrix const* a, Matrix* b) {
+    assert(a);
+    assert(b);
+    assert(mat_same_shape(a, b));
+
+    for (uint32_t i = 0; i < mat_element(a); ++i)
+        b->values[i] += a->values[i];
+}
+
+static inline void mat_zero(Matrix* m) {
+    assert(m);
+    for (uint32_t i = 0; i < mat_element(m); ++i)
+        m->values[i] = 0.0f;
+}
+
+static inline void mat_sub_into(Matrix const* a, Matrix* b) {
+    assert(a);
+    assert(b);
+    assert(mat_same_shape(a, b));
+
+    for (uint32_t i = 0; i < mat_element(a); ++i)
+        b->values[i] -= a->values[i];
+}
+
+static inline void mat_mulf(Matrix* m, float f) {
+    assert(m);
+    for (uint32_t i = 0; i < mat_element(m); ++i)
+        m->values[i] *= f;
+}
+
+static inline void _mat_mul_into_nn(Matrix const* a, Matrix const* b, Matrix* out) {
+    for (uint32_t i = 0; i < a->rows; ++i)
+        for (uint32_t k = 0; k < b->cols; ++k)
+            for (uint32_t j = 0; j < a->cols; ++j)
                 *mat_at(out, i, k) +=
                     mat_at_const(a, i, j) *
                     mat_at_const(b, j, k);
-            }
-        }
-    }
 }
 
-static inline void mat_mul_into_nt(Matrix const* a, Matrix const* b, Matrix* out) {
-    (void)a;
-    (void)b;
-    (void)out;
+static inline void _mat_mul_into_nt(Matrix const* a, Matrix const* b, Matrix* out) {
     abort();
 }
 
-static inline void mat_mul_into_tn(Matrix const* a, Matrix const* b, Matrix* out) {
-    for (uint32_t i = 0; i < a->cols; ++i) {
-        for (uint32_t k = 0; k < b->cols; ++k) {
-            for (uint32_t j = 0; j < a->rows; ++j) {
+static inline void _mat_mul_into_tn(Matrix const* a, Matrix const* b, Matrix* out) {
+    for (uint32_t k = 0; k < b->cols; ++k)
+        for (uint32_t i = 0; i < a->cols; ++i)
+            for (uint32_t j = 0; j < a->rows; ++j)
                 *mat_at(out, i, k) +=
                     mat_at_const(a, j, i) *
                     mat_at_const(b, j, k);
-            }
-        }
-    }
 }
 
-static inline void mat_mul_into_tt(Matrix const* a, Matrix const* b, Matrix* out) {
-    (void)a;
-    (void)b;
-    (void)out;
+static inline void _mat_mul_into_tt(Matrix const* a, Matrix const* b, Matrix* out) {
     abort();
 }
 
-void mat_mul_into(Matrix const* a, Matrix const* b, Matrix* out, bool transpose_a, bool transpose_b, bool zero) {
+static inline void mat_mul_into(Matrix const* a, Matrix const* b, Matrix* out, bool transpose_a, bool transpose_b, bool zero) {
     assert(a);
     assert(b);
     assert(out);
@@ -380,620 +291,394 @@ void mat_mul_into(Matrix const* a, Matrix const* b, Matrix* out, bool transpose_
     uint32_t b_cols = (transpose_b ? b->rows : b->cols);
 
     assert(a_cols == b_rows);
-    
-    mat_ensure_shape(out, a_rows, b_cols);
 
+    mat_ensure_shape(out, a_rows, b_cols);
     if (zero) mat_zero(out);
 
-    uint8_t flags = (uint8_t)((transpose_a << 1) | (transpose_b << 0));
+    uint8_t flag = (transpose_a << 1) | (transpose_b << 0);
 
-    switch (flags) {
-        case (0 << 1) | (0 << 0): mat_mul_into_nn(a, b, out); break;
-        case (1 << 1) | (0 << 0): mat_mul_into_tn(a, b, out); break;
-        case (0 << 1) | (1 << 0): mat_mul_into_nt(a, b, out); break;
-        case (1 << 1) | (1 << 0): mat_mul_into_tt(a, b, out); break;
-        default: abort();
+    switch (flag) {
+        case 0: _mat_mul_into_nn(a, b, out); break;
+        case 1: _mat_mul_into_nt(a, b, out); break;
+        case 2: _mat_mul_into_tn(a, b, out); break;
+        case 3: _mat_mul_into_tt(a, b, out); break;
     }
 }
 
-Parameter parameter_new(uint32_t rows, uint32_t cols) {
-    return (Parameter){
-        .value     = mat_new(rows, cols),
-        .gradient  = mat_new(rows, cols),
-        .optimizer = (AdamW){
-            .momentum = mat_new(rows, cols),
-            .variance = mat_new(rows, cols),
+static inline OptimizerConfig adamw_new(float betta_1, float betta_2, float lambda) {
+    return (OptimizerConfig){
+        .type = OPTIMIZER_ADAMW,
+        .data.adamw  = (AdamWConfig){
+            .betta_1 = betta_1,
+            .betta_2 = betta_2,
+            .lambda  = lambda,
         },
     };
 }
 
-void parameter_free(Parameter* parameter) {
-    assert(parameter);
-    mat_free(&parameter->value);
-    mat_free(&parameter->gradient);
-    mat_free(&parameter->optimizer.momentum);
-    mat_free(&parameter->optimizer.variance);
-    *parameter = (Parameter){0};
+static inline OptimizerConfig sgd_new(void) {
+    return (OptimizerConfig){
+        .type = OPTIMIZER_SGD,
+    };
 }
 
-void parameter_step(Parameter* parameter, float lr, float betta_1, float betta_2, float lambda, uint32_t t) {
-    assert(parameter);
-    assert(mat_same_shape(&parameter->value, &parameter->gradient));
-    assert(mat_same_shape(&parameter->value, &parameter->optimizer.momentum));
-    assert(mat_same_shape(&parameter->value, &parameter->optimizer.variance));
+static inline Optimizer optimizer_new(OptimizerConfig config, uint32_t rows, uint32_t cols) {
+    switch (config.type) {
+        case OPTIMIZER_SGD: return (Optimizer){.type = OPTIMIZER_SGD};
+        case OPTIMIZER_ADAMW: {
+            Optimizer optimizer;
+            optimizer.type = OPTIMIZER_ADAMW;
+            optimizer.data.adamw = (AdamW){
+                .momentum = mat_new(rows, cols),
+                .variance = mat_new(rows, cols),
+                .config = config.data.adamw,
+            };
+            return optimizer;
+        }
+    }
+}
 
-    const float betta_1_t = 1.0f - powf(betta_1, (float)t);
-    const float betta_2_t = 1.0f - powf(betta_2, (float)t);
+static inline void optimizer_free(Optimizer* optimizer) {
+    assert(optimizer);
+    switch (optimizer->type) {
+        case OPTIMIZER_SGD: break;
+        case OPTIMIZER_ADAMW: {
+            mat_free(&optimizer->data.adamw.momentum);
+            mat_free(&optimizer->data.adamw.variance);
+            break;
+        }
+    }
+    *optimizer = (Optimizer){0};
+}
 
-    const uint32_t n = mat_elem_count(&parameter->value);
+static inline LearningRate constant_learning_rate(float lr) {
+    return (LearningRate){
+        .type = LEARNING_RATE_CONSTANT,
+        .data.constant = (ConstantLearningRate){
+            .learning_rate = lr,
+        }
+    };
+}
 
-    float* const w = parameter->value.values;
-    float* const g = parameter->gradient.values;
-    float* const m = parameter->optimizer.momentum.values;
-    float* const v = parameter->optimizer.variance.values;
+static inline LearningRate exponential_learning_rate(float lr_begin, float lr_end, float exponent, uint32_t expected_steps) {
+    return (LearningRate){
+        .type = LEARNING_RATE_EXPONENTIAL,
+        .data.exponential   = (ExponentialLearningRate){
+            .lr_begin       = lr_begin,
+            .lr_end         = lr_end,
+            .exponent       = exponent,
+            .expected_steps = expected_steps,
+        }
+    };
+}
+
+static inline float learningrate_get_current(LearningRate lr, uint32_t t);
+static inline float learningrate_get_base(LearningRate lr);
+
+static inline void sgd_step(Matrix* value, Matrix* gradient, LearningRate lr, uint32_t t) {
+    assert(value);
+    assert(gradient);
+    assert(mat_same_shape(value, gradient));
+
+    mat_mulf(gradient, learningrate_get_current(lr, t));
+
+    mat_sub_into(value, gradient);
+
+    mat_zero(gradient);
+}
+
+static inline void adamw_step(Matrix* value, Matrix* gradient, AdamW* adamw, LearningRate lr, uint32_t t) {
+    assert(value);
+    assert(gradient);
+    assert(mat_same_shape(value, gradient));
+
+    const float lambda    = adamw->config.lambda;
+    const float betta_1   = adamw->config.betta_1;
+    const float betta_2   = adamw->config.betta_2;
+    const float betta_1_t = 1.0f - powf(adamw->config.betta_1, (float)t);
+    const float betta_2_t = 1.0f - powf(adamw->config.betta_2, (float)t);
+
+    const float alpha = learningrate_get_base(lr);
+    const float n     = learningrate_get_current(lr, t);
+
+    float* w = &value->values[0];
+    float* g = &gradient->values[0];
+    float* m = &adamw->momentum.values[0];
+    float* v = &adamw->variance.values[0];
     
-    for (uint32_t i = 0; i < n; ++i) {
+    for (uint32_t i = 0; i < mat_element(value); ++i) {
         m[i] = betta_1 * m[i] + (1.0f - betta_1) * g[i];
         v[i] = betta_2 * v[i] + (1.0f - betta_2) * g[i] * g[i];
 
-        float m_hat = m[i] / betta_1_t;
-        float v_hat = v[i] / betta_2_t;
+        const float m_hat = m[i] / (1.0f - betta_1_t);
+        const float v_hat = v[i] / (1.0f - betta_2_t);
 
-        w[i] -= lr * (m_hat / (sqrtf(v_hat) + 1e-5f) + lambda * w[i]);
+        w[i] = w[i] - n * (alpha * m_hat / (sqrtf(v_hat + 1e-5f)) + lambda * w[i]);
     }
-
-    mat_zero(&parameter->gradient);
 }
 
-Layer dense_new(uint32_t fan_in, uint32_t fan_out, DenseInitOption init_option) {
-    Layer layer;
-    layer.type    = LAYER_DENSE;
-    layer.fan_in  = fan_in;
-    layer.fan_out = fan_out;
-    layer.data.dense = (DenseLayer){
-        .weights = parameter_new(fan_out, fan_in),
-        .biases  = parameter_new(fan_out, 1),
-        .cached_activation = mat_new(fan_in,  1),
-        .temp_gradient     = mat_new(fan_in,  1),
-        .temp_output       = mat_new(fan_out, 1),
-    };
-
-    switch (init_option) {
-        case DENSE_INIT_XAVIER:  {
-            float range = sqrtf(6.0f / (float)(fan_in + fan_out));
-            for (uint32_t i = 0; i < mat_elem_count(&layer.data.dense.weights.value); ++i)
-                layer.data.dense.weights.value.values[i] = ((float)rand() / (float)RAND_MAX * 2.0f - 1.0f) * range;
-            break;
-        }
-        case DENSE_INIT_KAIMING: {
-            float range = sqrtf(2.0f / (float)fan_in);
-            for (uint32_t i = 0; i < mat_elem_count(&layer.data.dense.weights.value); ++i)
-                layer.data.dense.weights.value.values[i] = ((float)rand() / (float)RAND_MAX) * range;
-            break;
-        }
+static inline void optimizer_step(Matrix* value, Matrix* gradient, Optimizer* optimizer, LearningRate lr, uint32_t t) {
+    assert(value);
+    assert(gradient);
+    assert(optimizer);
+    switch (optimizer->type) {
+        case OPTIMIZER_SGD: sgd_step(value, gradient, lr, t); break;
+        case OPTIMIZER_ADAMW: adamw_step(value, gradient, &optimizer->data.adamw, lr, t); break;
     }
+}
+
+static inline Parameter parameter_new(uint32_t rows, uint32_t cols, OptimizerConfig optimizer_config) {
+    return (Parameter){
+        .value     = mat_new(rows, cols),
+        .gradient  = mat_new(rows, cols),
+        .optimizer = optimizer_new(optimizer_config, rows, cols),
+    };
+}
+
+static inline void parameter_free(Parameter* parameter) {
+    assert(parameter);
+    mat_free(&parameter->gradient);
+    mat_free(&parameter->value);
+    optimizer_free(&parameter->optimizer);
+    *parameter = (Parameter){0};
+}
+
+static inline void parameter_step(Parameter* parameter, LearningRate lr, uint32_t t) {
+    assert(parameter);
+    optimizer_step(&parameter->value, &parameter->gradient, &parameter->optimizer, lr, t);
+}
+
+static inline Layer _layer_new(LayerType type, uint32_t fan_in, uint32_t fan_out) {
+    Layer layer;
+    layer.type            = LAYER_DENSE;
+    layer.fan_in          = fan_in;
+    layer.fan_out         = fan_out;
+    layer.input           = mat_new(fan_in,  1);
+    layer.output          = mat_new(fan_out, 1);
+    layer.gradient_input  = mat_new(fan_out, 1);
+    layer.gradient_output = mat_new(fan_in,  1);
+
+    for (uint32_t i = 0; i < MAX_INCOMING; ++i) layer.incoming[i] = UINT32_MAX;
+    for (uint32_t i = 0; i < MAX_OUTGOING; ++i) layer.outgoing[i] = UINT32_MAX;
 
     return layer;
 }
 
-void dense_free(DenseLayer* dense) {
+static inline Layer dense_new(uint32_t fan_in, uint32_t fan_out, OptimizerConfig optimizer_config) {
+    Layer layer = _layer_new(LAYER_DENSE, fan_in, fan_out);
+
+    layer.data.dense = (DenseLayer){
+        .weights = parameter_new(fan_out, fan_in, optimizer_config),
+        .biases  = parameter_new(fan_out, 1, optimizer_config),
+        .cached_input  = mat_new(fan_in,  1),
+        .temp_output   = mat_new(fan_out, 1),
+        .temp_gradient = mat_new(fan_out, fan_in),
+    };
+
+    return layer;
+}
+
+static inline Layer activation_new(uint32_t fan_in, Function forward, Function backward) {
+    Layer layer = _layer_new(LAYER_ACTIVATION, fan_in, fan_in);
+
+    layer.data.activation = (Activationlayer){
+        .forward  = forward,
+        .backward = backward,
+        .cached_input = mat_new(fan_in, 1),
+    };
+    
+    return layer;
+}
+
+static inline Layer softmax_new(uint32_t fan_in, float temperatur) {
+    Layer layer = _layer_new(LAYER_SOFTMAX, fan_in, fan_in);
+    
+    layer.data.softmax = (SoftmaxLayer){
+        .temperatur = temperatur,
+        .cached_output = mat_new(fan_in, 1),
+    };
+    
+    return layer;
+}
+
+static inline Layer rmsnorm_new(uint32_t fan_in, OptimizerConfig optimizer_config) {
+    Layer layer = _layer_new(LAYER_RMSNORM, fan_in, fan_in);
+
+    layer.data.rmsnorm = (RMSNormLayer){
+        .scale  = parameter_new(fan_in, 1, optimizer_config),
+        .cached_input = mat_new(fan_in, 1),
+    };
+
+    return layer;
+}
+
+static inline void dense_free(DenseLayer* dense) {
     assert(dense);
-    parameter_free(&dense->weights);
-    parameter_free(&dense->biases);
-    mat_free(&dense->cached_activation);
+    mat_free(&dense->cached_input);
     mat_free(&dense->temp_output);
     mat_free(&dense->temp_gradient);
+    parameter_free(&dense->weights);
+    parameter_free(&dense->biases);
     *dense = (DenseLayer){0};
 }
 
-void dense_forward(DenseLayer* dense, Matrix* inout, bool train) {
-    assert(dense);
-    assert(inout);
-
-    if (train) mat_copy_into(inout, &dense->cached_activation);
-
-    mat_mul_into(&dense->weights.value, inout, &dense->temp_output, false, false, true);
-    mat_add_into(&dense->biases.value, &dense->temp_output);
-
-    mat_copy_into(&dense->temp_output, inout);
-}
-
-void dense_backward(DenseLayer* dense, Matrix* inout) {
-    assert(dense);
-    assert(inout);
-
-    mat_mul_into(&dense->weights.value, inout, &dense->temp_gradient, true, false, true);
-
-    mat_add_into(inout, &dense->biases.gradient);
-
-    for (uint32_t j = 0; j < dense->weights.gradient.cols; ++j) {
-        for (uint32_t i = 0; i < dense->weights.gradient.rows; ++i) {
-            *mat_at(&dense->weights.gradient, i, j) +=
-                mat_at_const(&dense->cached_activation, j, 0) *
-                mat_at_const(inout, i, 0);
-        }
-    }
-
-    mat_copy_into(&dense->temp_gradient, inout);
-}
-
-void dense_step(DenseLayer* dense, float lr, float betta_1, float betta_2, float lambda, uint32_t t) {
-    assert(dense);
-    parameter_step(&dense->weights, lr, betta_1, betta_2, lambda, t);
-    parameter_step(&dense->biases,  lr, betta_1, betta_2, lambda, t);
-}
-
-Layer activation_new(uint32_t fan_in, Function forward, Function derivative) {
-    Layer layer;
-    layer.type = LAYER_ACTIVATION;
-    layer.fan_in  = fan_in;
-    layer.fan_out = fan_in;
-    layer.data.activation = (ActivationLayer){
-        .forward    = forward,
-        .derivative = derivative,
-        .cached_activation = mat_new(fan_in, 1),
-    };
-    return layer;
-}
-
-void activation_free(ActivationLayer* activation) {
+static inline void activation_free(Activationlayer* activation) {
     assert(activation);
-    mat_free(&activation->cached_activation);
-    *activation = (ActivationLayer){0};
+    mat_free(&activation->cached_input);
+    *activation = (Activationlayer){0};
 }
 
-void activation_forward(ActivationLayer* activation, Matrix* inout, bool train) {
-    assert(activation);
-    assert(inout);
-
-    if (train) mat_copy_into(inout, &activation->cached_activation);
-
-    for (uint32_t i = 0; i < mat_elem_count(inout); ++i)
-        inout->values[i] = activation->forward(inout->values[i]);
-}
-
-void activation_backward(ActivationLayer* activation, Matrix* inout) {
-    assert(activation);
-    assert(inout);
-
-    for (uint32_t i = 0; i < mat_elem_count(inout); ++i)
-        inout->values[i] *= activation->derivative(activation->cached_activation.values[i]);
-}
-
-Layer layernorm_new(uint32_t fan_in) {
-    Layer layer;
-    layer.type    = LAYER_LAYERNORM;
-    layer.fan_in  = fan_in;
-    layer.fan_out = fan_in;
-    layer.data.layernorm = (LaynormLayer){
-        .scale = parameter_new(fan_in, 1),
-        .shift = parameter_new(fan_in, 1),
-        .cached_input  = mat_new(fan_in, 1),
-        .cached_output = mat_new(fan_in, 1),
-    };
-    for (uint32_t i = 0; i < mat_elem_count(&layer.data.layernorm.scale.value); ++i)
-        layer.data.layernorm.scale.value.values[i] = 1.0f;
-    
-    return layer;
-}
-
-void layernorm_free(LaynormLayer* layernorm) {
-    assert(layernorm);
-    parameter_free(&layernorm->scale);
-    parameter_free(&layernorm->shift);
-    mat_free(&layernorm->cached_input);
-    mat_free(&layernorm->cached_output);
-    *layernorm = (LaynormLayer){0};
-}
-
-static inline float sumf(float const* values, uint32_t count) {
-    assert(values);
-    
-    float sum = 0.0f;
-    for (uint32_t i = 0; i < count; ++i)
-        sum += values[i];
-    return sum;
-}
-
-static inline float meanf(float const* values, uint32_t count) {
-    assert(values);
-    
-    return sumf(values, count) / (float)count;
-}
-
-static inline float variancef(float const* values, float mean, uint32_t count) {
-    assert(values);
-    
-    float variance = 0.0f;
-    for (uint32_t i = 0; i < count; ++i)
-        variance += powf(values[i] - mean, 2.0f);
-    return variance / (float)count;
-}
-
-void layernorm_forward(LaynormLayer* layernorm, Matrix* inout, bool train) {
-    assert(layernorm);
-    assert(inout);
-    
-    const uint32_t n = mat_elem_count(inout);
-    
-    const float mean = meanf(inout->values, n);
-    const float std  = sqrtf(variancef(inout->values, mean, n) + 1e-5f);
-
-    if (train) {
-        mat_copy_into(inout, &layernorm->cached_input);
-        layernorm->cached_mean = mean;
-        layernorm->cached_std  = std;
-    }
-
-    for (uint32_t i = 0; i < n; ++i) {
-        inout->values[i] = (inout->values[i] - mean) / std;
-        if (train) layernorm->cached_output.values[i] = inout->values[i];
-        inout->values[i] = layernorm->scale.value.values[i] * inout->values[i] + layernorm->shift.value.values[i];
-    }
-}
-
-void layernorm_backward(LaynormLayer* layernorm, Matrix* inout) {
-    assert(layernorm);
-    assert(inout);
-
-    const uint32_t n = mat_elem_count(inout);
-
-    mat_add_into(inout, &layernorm->shift.gradient);
-
-    for (uint32_t i = 0; i < n; ++i) {
-        layernorm->scale.gradient.values[i] += inout->values[i] * layernorm->cached_output.values[i];
-        inout->values[i] *= layernorm->scale.value.values[i];
-    }
-
-    float sum = 0.0f;
-    float sum_normalized = 0.0f;
-
-    for (uint32_t i = 0; i < n; ++i) {
-        sum += inout->values[i];
-        sum_normalized += inout->values[i] * layernorm->cached_output.values[i];
-    }
-
-    for (uint32_t i = 0; i < n; ++i) {
-        inout->values[i] = (inout->values[i] * (float)n - sum - layernorm->cached_output.values[i] * sum_normalized) / ((float)n * layernorm->cached_std);
-    }
-}
-
-void layernorm_step(LaynormLayer* layernorm, float lr, float betta_1, float betta_2, float lambda, uint32_t t) {
-    parameter_step(&layernorm->scale, lr, betta_1, betta_2, lambda, t);
-    parameter_step(&layernorm->shift, lr, betta_1, betta_2, lambda, t);
-}
-
-Layer softmax_new(uint32_t fan_in, float temp) {
-    assert(temp > 0.0f);
-    Layer layer;
-    layer.type    = LAYER_SOFTMAX;
-    layer.fan_in  = fan_in;
-    layer.fan_out = fan_in;
-    layer.data.softmax = (SoftmaxLayer){
-        .temp = temp,
-        .cached_output = mat_new(fan_in, 1),
-    };
-    return layer;
-}
-
-void softmax_free(SoftmaxLayer* softmax) {
+static inline void softmax_free(SoftmaxLayer* softmax) {
     assert(softmax);
     mat_free(&softmax->cached_output);
     *softmax = (SoftmaxLayer){0};
 }
 
-void softmax_forward(SoftmaxLayer* softmax, Matrix* inout, bool train) {
-    assert(softmax);
-    assert(inout);
-    assert(inout->rows >= 1);
-
-    const uint32_t n = mat_elem_count(inout);
-
-    float max = inout->values[0];
-
-    for (uint32_t i = 1; i < n; ++i)
-        if (max < inout->values[i])
-            max = inout->values[i];
-
-    float exps[n];
-
-    for (uint32_t i = 0; i < n; ++i)
-        exps[i] = expf((inout->values[i] - max) / softmax->temp);
-
-    float sum = sumf(exps, n);
-
-    for (uint32_t i = 0; i < n; ++i)
-        inout->values[i] = exps[i] / sum;
-
-    if (train) mat_copy_into(inout, &softmax->cached_output);
+static inline void rmsnorm_free(RMSNormLayer* rmsnorm) {
+    assert(rmsnorm);
+    mat_free(&rmsnorm->cached_input);
+    parameter_free(&rmsnorm->scale);
+    *rmsnorm = (RMSNormLayer){0};
 }
 
-void softmax_backward(SoftmaxLayer* softmax, Matrix* inout) {
-    assert(softmax);
-    assert(inout);
-    assert(softmax->cached_output.rows == inout->rows);
-
-    const uint32_t n = mat_elem_count(inout);
-
-    float dot = 0.0f;
-
-    for (uint32_t i = 0; i < n; ++i)
-        dot += inout->values[i] * softmax->cached_output.values[i];
-
-    for (uint32_t i = 0; i < n; ++i)
-        inout->values[i] = softmax->cached_output.values[i] * (inout->values[i] - dot) / softmax->temp;
-}
-
-void layer_forward(Layer* layer, Matrix* inout, bool train) {
+static inline void layer_free(Layer* layer) {
     assert(layer);
-    assert(inout);
+    mat_free(&layer->input);
+    mat_free(&layer->output);
+    mat_free(&layer->gradient_input);
+    mat_free(&layer->gradient_output);
 
     switch (layer->type) {
-        case LAYER_DENSE: dense_forward(&layer->data.dense, inout, train); break;
-        case LAYER_ACTIVATION: activation_forward(&layer->data.activation, inout, train); break;
-        case LAYER_LAYERNORM: layernorm_forward(&layer->data.layernorm, inout, train); break;
-        case LAYER_SOFTMAX: softmax_forward(&layer->data.softmax, inout, train); break;
-    }
-}
-
-void layer_backward(Layer* layer, Matrix* inout) {
-    assert(layer);
-    assert(inout);
-
-    switch (layer->type) {
-        case LAYER_DENSE: dense_backward(&layer->data.dense, inout); break;
-        case LAYER_ACTIVATION: activation_backward(&layer->data.activation, inout); break;
-        case LAYER_LAYERNORM: layernorm_backward(&layer->data.layernorm, inout); break;
-        case LAYER_SOFTMAX: softmax_backward(&layer->data.softmax, inout); break;
-    }
-}
-
-void layer_free(Layer* layer) {
-    assert(layer);
-
-    switch (layer->type) {
-        case LAYER_DENSE: dense_free(&layer->data.dense); break;
+        case LAYER_DENSE:      dense_free(&layer->data.dense); break;
         case LAYER_ACTIVATION: activation_free(&layer->data.activation); break;
-        case LAYER_LAYERNORM: layernorm_free(&layer->data.layernorm); break;
-        case LAYER_SOFTMAX: softmax_free(&layer->data.softmax); break;
+        case LAYER_SOFTMAX:    softmax_free(&layer->data.softmax); break;
+        case LAYER_RMSNORM:    rmsnorm_free(&layer->data.rmsnorm); break;
     }
+
+    *layer = (Layer){0};
 }
 
-void layer_step(Layer* layer, float lr, float betta_1, float betta_2, float lambda, uint32_t t) {
+static inline void dense_forward(DenseLayer* dense, Matrix const* input, Matrix* output, bool train);
+static inline void activation_forward(Activationlayer* activation, Matrix const* input, Matrix* output, bool train);
+static inline void softmax_forward(SoftmaxLayer* softmax, Matrix const* input, Matrix* output, bool train);
+static inline void rmsnorm_forward(RMSNormLayer* rmsnorm, Matrix const* input, Matrix* output, bool train);
+
+static inline void dense_backward(DenseLayer* dense, Matrix const* input, Matrix* output);
+static inline void activation_backward(Activationlayer* activation, Matrix const* input, Matrix* output);
+static inline void softmax_backward(SoftmaxLayer* softmax, Matrix const* input, Matrix* output);
+static inline void rmsnorm_backward(RMSNormLayer* rmsnorm, Matrix const* input, Matrix* output);
+
+static inline void layer_forward(Layer* layer, Matrix const* input, Matrix* output, bool train) {
     assert(layer);
-
+    assert(input);
+    assert(output);
+    
     switch (layer->type) {
-        case LAYER_DENSE: dense_step(&layer->data.dense, lr, betta_1, betta_2, lambda, t); break;
-        case LAYER_ACTIVATION: break;
-        case LAYER_LAYERNORM: layernorm_step(&layer->data.layernorm, lr, betta_1, betta_2, lambda, t); break;
-        case LAYER_SOFTMAX: break;
+        case LAYER_DENSE: dense_forward(&layer->data.dense, input, output, train); break;
+        case LAYER_ACTIVATION: activation_forward(&layer->data.activation, input, output, train); break;
+        case LAYER_SOFTMAX: softmax_forward(&layer->data.softmax, input, output, train); break;
+        case LAYER_RMSNORM: rmsnorm_forward(&layer->data.rmsnorm, input, output, train); break;
     }
 }
 
-LearningRate constant_learning_rate(float lr) {
-    return (LearningRate){
-        .type = LEARNING_RATE_CONSTANT,
-        .data.constant = (ConstantLearningRate){
-            .learning_rate = lr,
-        },
-    };
-}
-
-LearningRate exponential_learning_rate(float lr_begin, float lr_end, float exponent, uint32_t expected_steps) {
-    return (LearningRate){
-        .type = LEARNING_RATE_EXPONENTIAL,
-        .data.exponential = (ExponentialLearningRate){
-            .lr_begin       = lr_begin,
-            .lr_end         = lr_end,
-            .exponent       = exponent,
-            .expected_steps = expected_steps,
-        },
-    };
-}
-
-float get_learning_rate(LearningRate learning_rate, uint32_t step) {
-    switch (learning_rate.type) {
-        case LEARNING_RATE_CONSTANT: return learning_rate.data.constant.learning_rate;
-        case LEARNING_RATE_EXPONENTIAL: {
-            float t = (float)step / (float)learning_rate.data.exponential.expected_steps;
-            if (t > 1.0f) t = 1.0f;
-            return learning_rate.data.exponential.lr_end
-                + (learning_rate.data.exponential.lr_begin - learning_rate.data.exponential.lr_end)
-                * powf(1.0f - t, learning_rate.data.exponential.exponent);
-        }
-        default: {
-            unreachable();
-        }
+static inline void layer_backward(Layer* layer, Matrix const* input, Matrix* output) {
+    assert(layer);
+    assert(input);
+    assert(output);
+    
+    switch (layer->type) {
+        case LAYER_DENSE: dense_backward(&layer->data.dense, input, output); break;
+        case LAYER_ACTIVATION: activation_backward(&layer->data.activation, input, output); break;
+        case LAYER_SOFTMAX: softmax_backward(&layer->data.softmax, input, output); break;
+        case LAYER_RMSNORM: rmsnorm_backward(&layer->data.rmsnorm, input, output); break;
     }
 }
 
-MLP mlp_new(void) {
+static inline MLP mlp_new(void) {
     return (MLP){
-        .learning_rate  = constant_learning_rate(0.005f),
-        .loss_function  = LOSS_MSE,
-        .betta_1        = 0.9f,
-        .betta_2        = 0.999f,
-        .lambda         = 0.001f,
-        .mini_batch     = 4,
-
-        .t = 1,
-        .optimizer_step = 0,
-        .layer_count = 0,
-        .layers = NULL,
+        .learning_rate = constant_learning_rate(0.005f),
+        .loss_function = LOSS_MSE,
+        .mini_batch    = 4,
     };
 }
 
-float leaky_relu(float x) {
-    return (x > 0.0f ? x : 0.1f * x);
-}
-
-float leaky_relu_derivative(float x) {
-    return (x > 0.0f ? 1 : 0.1f);
-}
-
-float sigmoid(float x) {
-    return 1.0f / (1.0f + expf(x));
-}
-
-float sigmoid_derivative(float x) {
-    float s = sigmoid(x);
-    return s * (1.0f - s);
-}
-
-float tanh_derivative(float x) {
-    float t = tanhf(x);
-    return 1.0f - t * t;
-}
-
-float elu(float x) {
-    return (x >= 0.0f ? x : (expf(x) - 1));
-}
-
-float elu_derivative(float x) {
-    return (x >= 0.0f ? x : expf(x));
-}
-
-float gelu(float x) {
-    return x * sigmoid(1.702f * x); // GELU approximation using sigmoid
-}
-
-float gelu_derivative(float x) {
-    float x_hat = 1.702f * x;
-    float s = sigmoid(x_hat);
-    return s + x_hat * s * (1.0f - s);
-}
-
-float softsign(float x) {
-    return x / (1.0f + fabsf(x));
-}
-
-float softsign_derivative(float x) {
-    return 1.0f / powf((1 + fabsf(x)), 2);
-}
-
-float softplus(float x) {
-    return logf(1.0f + expf(x));
-}
-
-float softplus_derivative(float x) {
-    return 1.0f / (1.0f + expf(-x));
-}
-
-void mlp_free(MLP* mlp) {
+static inline void mlp_free(MLP* mlp) {
     assert(mlp);
 
     for (uint32_t i = 0; i < mlp->layer_count; ++i)
         layer_free(&mlp->layers[i]);
     
     if (mlp->layers) free(mlp->layers);
+
     *mlp = (MLP){0};
 }
 
-void mlp_push_layer(MLP* mlp, Layer layer) {
+static inline uint32_t mlp_push_layer(MLP* mlp, Layer layer) {
     assert(mlp);
-
-    uint32_t n = mlp->layer_count;
-
-    mlp->layers = (Layer*)realloc(mlp->layers, ++mlp->layer_count * sizeof(Layer));
-
-    mlp->layers[n] = layer;
+    mlp->layers = realloc(mlp->layers, ++mlp->layer_count * sizeof(Layer));
+    return (mlp->layer_count - 1);
 }
 
-static inline void mlp_forward_helper(MLP* mlp, Matrix* inout, bool train) {
+static inline void mlp_connect_layer(MLP* mlp, uint32_t output_from, uint32_t into_input) {
+    assert(mlp);
+    assert(output_from < mlp->layer_count);
+    assert(into_input  < mlp->layer_count);
+    assert(output_from < into_input); // assert that the activations are always flowing upstream
+    assert(mlp->layers[output_from].fan_out == mlp->layers[into_input].fan_in); // check correct dimension size
+
+    // Linear search that searches for empty slots and connects both layers
+
+    bool found_empty_incoming = false;
+    bool found_empty_outgoing = false;
+    
+    for (uint32_t i = 0; i < MAX_OUTGOING; ++i)
+        if (mlp->layers[output_from].outgoing[i] == UINT32_MAX) {
+            mlp->layers[output_from].outgoing[i] = into_input;
+            found_empty_outgoing = true;
+            break;
+        }
+
+    for (uint32_t i = 0; i < MAX_INCOMING; ++i)
+        if (mlp->layers[into_input].incoming[i] == UINT32_MAX) {
+            mlp->layers[into_input].incoming[i] = output_from;
+            found_empty_incoming = true;
+            break;
+        }
+
+    assert(found_empty_incoming);
+    assert(found_empty_outgoing);
+}
+
+static inline void _mlp_forward(MLP* mlp, Matrix* inout, bool train) {
     assert(mlp);
     assert(inout);
 
     for (uint32_t i = 0; i < mlp->layer_count; ++i)
-        layer_forward(&mlp->layers[i], inout, train);
-}
+        mat_zero(&mlp->layers[i].input);
 
-void mlp_forward(MLP* mlp, Matrix* inout) {
-    mlp_forward_helper(mlp, inout, false);
-}
+    mat_copy_into(inout, &mlp->layers[0].input);
 
-static inline void mlp_backward(MLP* mlp, Matrix* inout) {
-    assert(mlp);
-    assert(inout);
+    for (uint32_t i = 0; i < mlp->layer_count; ++i) {
+        layer_forward(&mlp->layers[i], &mlp->layers[i].input, &mlp->layers[i].output, train);
 
-    for (uint32_t i = mlp->layer_count; i-- > 0;)
-        layer_backward(&mlp->layers[i], inout);
-}
-
-void mlp_train(MLP* mlp, Matrix const* input, Matrix const* desired_output) {
-    assert(mlp);
-    assert(input);
-    assert(desired_output);
-
-    Matrix inout = mat_new(input->rows, input->cols);
-    mat_copy_into(input, &inout);
-
-    mlp_forward_helper(mlp, &inout, true);
-
-    switch (mlp->loss_function) {
-        case LOSS_MSE: {
-            const uint32_t n = mat_elem_count(&inout);
-            
-            for (uint32_t i = 0; i < n; ++i) {
-                const float y = desired_output->values[i];
-                const float p = inout.values[i];
-                
-                inout.values[i] = (p - y);
-            }
-            break;
+        for (uint32_t c = 0; c < MAX_OUTGOING; ++c) {
+            const uint32_t connection = mlp->layers[i].outgoing[c];
+            if (connection == UINT32_MAX) continue;
+            mat_add_into(&mlp->layers[i].output, &mlp->layers[connection].input);
         }
-        case LOSS_MAE: {
-            const uint32_t n = mat_elem_count(&inout);
-            
-            for (uint32_t i = 0; i < n; ++i) {
-                const float y = desired_output->values[i];
-                const float p = inout.values[i];
-                
-                inout.values[i] = (p > y ? 1 : -1);
-            }
-            break;
-        }
-        case LOSS_BINARY_CROSS_ENTROPY: {
-            const uint32_t n = mat_elem_count(&inout);
-            
-            for (uint32_t i = 0; i < n; ++i) {
-                const float y = desired_output->values[i];
-                const float p = inout.values[i];
-
-                inout.values[i] = (p - y) / (p * (1 - p));
-            }
-            break;
-        }
-        case LOSS_CATEGORICAL_CROSS_ENTROPY: {
-            const uint32_t n = mat_elem_count(&inout);
-            
-            for (uint32_t i = 0; i < n; ++i) {
-                const float y = desired_output->values[i];
-                const float p = inout.values[i];
-
-                inout.values[i] = -y / p;
-            }
-            break;
-        }
-        default: abort();
     }
 
-    mat_mulf(&inout, 1.0f / (float)mlp->mini_batch);
-
-    mlp_backward(mlp, &inout);
-
-    mat_free(&inout);
-
-    float lr = get_learning_rate(mlp->learning_rate, mlp->optimizer_step);
-
-    mlp->optimizer_step++;
-
-    if ((mlp->optimizer_step % mlp->mini_batch) == 0) {
-        for (uint32_t i = 0; i < mlp->layer_count; ++i)
-            layer_step(&mlp->layers[i], lr, mlp->betta_1, mlp->betta_2, mlp->lambda, mlp->t);
-
-        mlp->t++;
-    }
+    mat_copy_into(&mlp->layers[mlp->layer_count - 1].output, inout);
 }
+
+static inline void mlp_forward(MLP* mlp, Matrix* inout) {
+    _mlp_forward(mlp, inout, false);
+}
+
+// static inline void mlp_train(MLP* mlp, Matrix const* input, Matrix const* desired_output) {
+//     Matrix activation = mat_copy(input);
+//     _mlp_forward(mlp, &activation, true);
+// }
 
 #ifdef __cplusplus
 }

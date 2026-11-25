@@ -3,7 +3,7 @@ CC ?= gcc
 BUILD ?= release
 BUILD_DIR = build/$(BUILD)
 
-COMMON_FLAGS = -std=c99 -Wall -Wextra -Wpedantic -Wno-unused -Wconversion -Wsign-conversion -Wshadow -Wformat=2 -Wnull-dereference -Wdouble-promotion -Wstrict-prototypes -Wmissing-prototypes -Wold-style-definition -Wundef -Wcast-qual -Wwrite-strings
+COMMON_FLAGS = -std=c99 -Wall -Wextra -Werror -Wpedantic -Wno-unused -Wconversion -Wsign-conversion -Wshadow -Wformat=2 -Wnull-dereference -Wdouble-promotion -Wstrict-prototypes -Wmissing-prototypes -Wold-style-definition -Wundef -Wcast-qual -Wwrite-strings
 
 SOURCES = $(wildcard src/*.c)
 OBJECTS = $(patsubst src/%.c,build/$(BUILD)/%.o,$(SOURCES))
